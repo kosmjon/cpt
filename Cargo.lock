@@ -5,7 +5,17 @@ version = 4
 [[package]]
 name = "i8080-cpu"
 version = "0.1.0"
+dependencies = [
+ "i8080-isa",
+]
+
+[[package]]
+name = "i8080-isa"
+version = "0.1.0"
 
 [[package]]
 name = "mol80asm"
 version = "0.1.0"
+dependencies = [
+ "i8080-isa",
+]

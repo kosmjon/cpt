@@ -1,9 +1,8 @@
 # CPT 8000 Emulator — Implementation Plan
 
-- [ ] 1. Set up the cargo workspace and shared ISA crate
-  - Create the workspace with crates `i8080-isa`, `i8080-cpu`, `cpt-link`, `cpt-machine`, `cpt-wasm`.
-  - Move/share the 8080 opcode + mnemonic metadata into `i8080-isa` so the emulator's
-    disassembler and the assembler's transpiler use one table.
+- [x] 1. Set up the cargo workspace and shared ISA crate
+  - Workspace created with `mol80asm`, `crates/i8080-isa`, `crates/i8080-cpu` (link/machine/wasm to come).
+  - `i8080-isa`: opcode-indexed 256-entry table (mnemonic + length) with `lookup`, `disassemble`, `disassemble_all`. Shared by both tools: `mol80asm`'s transpiler now sources its mnemonics from it, and it provides the emulator's disassembly. Cross-check test proves the table's lengths match the CPU's actual PC advance for every opcode.
   - _Requirements: 9.4_
 
 - [x] 2. Implement the 8080 CPU core (`i8080-cpu`)

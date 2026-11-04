@@ -7,3 +7,6 @@ description = "A pure, hardware-agnostic Intel 8080 CPU emulator core"
 [lib]
 name = "i8080_cpu"
 path = "src/lib.rs"
+
+[dev-dependencies]
+i8080-isa = { path = "../i8080-isa" }

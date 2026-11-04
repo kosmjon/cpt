@@ -1,0 +1,9 @@
+[package]
+name = "i8080-isa"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Intel 8080 instruction metadata: opcode-indexed mnemonics, lengths, and disassembly"
+
+[lib]
+name = "i8080_isa"
+path = "src/lib.rs"

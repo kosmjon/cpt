@@ -2,5 +2,6 @@
 resolver = "2"
 members = [
     "mol80asm",
+    "crates/i8080-isa",
     "crates/i8080-cpu",
 ]

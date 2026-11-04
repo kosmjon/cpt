@@ -53,8 +53,7 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
 
         Item::CondJump { flag, value, target } => {
             let info = cond_jump(*flag, *value);
-            let mnem = info.i8080.replace("{addr}", &target_str(target));
-            emit(out, &mnem);
+            emit(out, &format!("{} {}", info.i8080, target_str(target)));
         }
 
         Item::CondBlock { cond, body } => {
@@ -63,14 +62,14 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
                 Condition::Flag { flag, value } => {
                     let inverted = if *value == 1 { 0 } else { 1 };
                     let info = cond_jump(*flag, inverted);
-                    emit(out, &info.i8080.replace("{addr}", &end));
+                    emit(out, &format!("{} {}", info.i8080, end));
                 }
                 Condition::Compare { lhs, rhs } => {
                     // Only `A = <reg>` supported; CMP r then JNZ @end.
                     if let (Operand::Reg(Reg::A), Operand::Reg(r)) = (lhs, rhs) {
                         emit(out, &format!("CMP {}", reg_str(*r)));
                         let jnz = cond_jump(FlagKind::Z, 0);
-                        emit(out, &jnz.i8080.replace("{addr}", &end));
+                        emit(out, &format!("{} {}", jnz.i8080, end));
                     } else {
                         emit(out, "; <unsupported comparison>");
                     }

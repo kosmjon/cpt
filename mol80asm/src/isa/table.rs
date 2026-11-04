@@ -275,20 +275,34 @@ pub struct CondJumpInfo {
 ///
 /// 8080 conditional jumps: JNZ=0xC2, JZ=0xCA, JNC=0xD2, JC=0xDA, JPO=0xE2, JPE=0xEA,
 /// JP=0xF2, JM=0xFA. Confirmed by the scan's right column (opcodes 242..=250 region).
+/// The opcode is the single source of truth; the mnemonic comes from the shared `i8080-isa`.
 pub fn cond_jump(flag: FlagKind, value: u8) -> CondJumpInfo {
-    let (opcode, i8080) = match (flag, value) {
-        (FlagKind::Z, 1) => (0xCA, "JZ {addr}"),
-        (FlagKind::Z, 0) => (0xC2, "JNZ {addr}"),
-        (FlagKind::C, 1) => (0xDA, "JC {addr}"),
-        (FlagKind::C, 0) => (0xD2, "JNC {addr}"),
-        (FlagKind::P, 1) => (0xEA, "JPE {addr}"), // parity even
-        (FlagKind::P, 0) => (0xE2, "JPO {addr}"), // parity odd
-        (FlagKind::S, 1) => (0xFA, "JM {addr}"),  // sign set => minus
-        (FlagKind::S, 0) => (0xF2, "JP {addr}"),  // sign clear => plus
-        // value is validated to 0/1 by the parser; default keeps the function total.
-        _ => (0xC3, "JMP {addr}"),
+    let opcode = match (flag, value) {
+        (FlagKind::Z, 1) => 0xCA,
+        (FlagKind::Z, 0) => 0xC2,
+        (FlagKind::C, 1) => 0xDA,
+        (FlagKind::C, 0) => 0xD2,
+        (FlagKind::P, 1) => 0xEA, // JPE (parity even)
+        (FlagKind::P, 0) => 0xE2, // JPO (parity odd)
+        (FlagKind::S, 1) => 0xFA, // JM (sign set => minus)
+        (FlagKind::S, 0) => 0xF2, // JP (sign clear => plus)
+        _ => 0xC3,                // parser validates value to 0/1; keep total
     };
+    // `i8080-isa` renders e.g. "JZ a16"; strip the operand to get the bare mnemonic, then the
+    // transpiler appends the target itself.
+    let i8080 = bare_mnemonic(opcode);
     CondJumpInfo { opcode, i8080 }
+}
+
+/// The bare mnemonic (no operand) for an opcode, from the shared `i8080-isa` table.
+/// E.g. opcode 0xCA ("JZ a16") -> "JZ"; 0xC8 ("RZ") -> "RZ".
+fn bare_mnemonic(opcode: u8) -> &'static str {
+    let full = i8080_isa::lookup(opcode).mnemonic;
+    // Mnemonics are "OP" or "OP operand"; take the part before the first space.
+    match full.split_once(' ') {
+        Some((op, _)) => op,
+        None => full,
+    }
 }
 
 /// PUSH rp opcode: B=0xC5, D=0xD5, H=0xE5, PSW=0xF5. Returns None for unsupported operands.
@@ -344,19 +358,23 @@ pub struct CondRetInfo {
 /// Map a PSW flag test `(flag, value)` to its 8080 conditional-RET opcode.
 ///
 /// RNZ=0xC0, RZ=0xC8, RNC=0xD0, RC=0xD8, RPO=0xE0, RPE=0xE8, RP=0xF0, RM=0xF8.
+/// The mnemonic comes from the shared `i8080-isa` table.
 pub fn cond_return(flag: FlagKind, value: u8) -> CondRetInfo {
-    let (opcode, i8080) = match (flag, value) {
-        (FlagKind::Z, 1) => (0xC8, "RZ"),
-        (FlagKind::Z, 0) => (0xC0, "RNZ"),
-        (FlagKind::C, 1) => (0xD8, "RC"),
-        (FlagKind::C, 0) => (0xD0, "RNC"),
-        (FlagKind::P, 1) => (0xE8, "RPE"),
-        (FlagKind::P, 0) => (0xE0, "RPO"),
-        (FlagKind::S, 1) => (0xF8, "RM"),
-        (FlagKind::S, 0) => (0xF0, "RP"),
-        _ => (0xC9, "RET"),
+    let opcode = match (flag, value) {
+        (FlagKind::Z, 1) => 0xC8,
+        (FlagKind::Z, 0) => 0xC0,
+        (FlagKind::C, 1) => 0xD8,
+        (FlagKind::C, 0) => 0xD0,
+        (FlagKind::P, 1) => 0xE8,
+        (FlagKind::P, 0) => 0xE0,
+        (FlagKind::S, 1) => 0xF8,
+        (FlagKind::S, 0) => 0xF0,
+        _ => 0xC9,
     };
-    CondRetInfo { opcode, i8080 }
+    CondRetInfo {
+        opcode,
+        i8080: bare_mnemonic(opcode),
+    }
 }
 
 /// Compare-register opcode CMP r (0xB8 + r), used to lower `A=B? (...)` blocks.

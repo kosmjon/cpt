@@ -11,3 +11,6 @@ path = "src/main.rs"
 [lib]
 name = "mol80asm"
 path = "src/lib.rs"
+
+[dependencies]
+i8080-isa = { path = "../crates/i8080-isa" }
