@@ -1,0 +1,14 @@
+[package]
+name = "cpt-run"
+version = "0.1.0"
+edition = "2021"
+description = "CLI trace runner: loads a program, runs it on the CPT machine, prints a disassembled trace"
+
+[[bin]]
+name = "cpt-run"
+path = "src/main.rs"
+
+[dependencies]
+i8080-cpu = { path = "../i8080-cpu" }
+i8080-isa = { path = "../i8080-isa" }
+cpt-machine = { path = "../cpt-machine" }

@@ -10,6 +10,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpt-run"
+version = "0.1.0"
+dependencies = [
+ "cpt-machine",
+ "i8080-cpu",
+ "i8080-isa",
+]
+
+[[package]]
 name = "i8080-cpu"
 version = "0.1.0"
 dependencies = [
