@@ -31,16 +31,16 @@
   - [x] 3.5 Tests: remap on bank write, persistence of de-selected blocks across swaps, CPU-driven OUT, encoding mask, initial selection (8 tests).
     - _Requirements: 2.3, 2.4_
 
-- [~] 4. Define `MachineConfig` and the bus/device dispatch
+- [x] 4. Define `MachineConfig` and the bus/device dispatch
   - [x] 4.1 `MachineConfig` centralizing the bank-select port, encoding, block count, and initial block ([VERIFY] device ports to be added with each device).
     - _Requirements: 2.3, 2.5_
   - [x] 4.2 `Bus` implemented on `Machine`, routing the bank-select port; unmapped ports recorded (not crashed) for later discovery.
     - _Requirements: 2.5_
-  - [ ] 4.3 Define the `Device` trait (io_in/io_out/tick/take_irq). — next, with the first device
+  - [x] 4.3 `Device` trait (ports/io_in/io_out/tick/take_irq + as_any_mut downcast). `Machine` owns devices, routes ports, panics on port collisions, records unmapped ports.
     - _Requirements: 2.5, 1.4_
 
-- [ ] 5. Implement the executive loop and interrupts
-  - Step CPU, tick devices, deliver IRQs when enabled.
+- [x] 5. Implement the executive loop and interrupts
+  - `Executive` steps the CPU, ticks devices with elapsed cycles, and delivers a pending IRQ each step. `run_until_halt`/`run_cycles` with a terminal-halt (HLT + interrupts disabled) stop condition. Verified: timer device raises an IRQ that wakes a halted CPU and vectors to the RST handler.
   - _Requirements: 1.4, 1.5_
 
 - [ ] 6. Implement the display device and page buffer

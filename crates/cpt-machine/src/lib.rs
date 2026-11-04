@@ -1,22 +1,28 @@
 //! CPT workstation hardware model.
 //!
 //! This crate ties the CPT-specific hardware to the generic [`i8080_cpu`] core by implementing
-//! its [`Bus`] trait. The first piece is the banked memory + bank-select port (Req 2); display,
-//! keyboard, and the data disk are added as later increments, each behind its port range in
-//! [`MachineConfig`].
+//! its [`Bus`] trait. It provides the banked memory + bank-select port (Req 2), a [`Device`]
+//! interface for peripherals, and an executive loop that runs the CPU while ticking devices
+//! and delivering interrupts.
 
 pub mod config;
+pub mod device;
+pub mod exec;
 pub mod memory;
 
 pub use config::{BankSelectEncoding, MachineConfig};
+pub use device::Device;
+pub use exec::Executive;
 pub use memory::{BankedMemory, BANK1_BASE, BANK_SIZE};
 
 use i8080_cpu::Bus;
 
-/// The CPT machine: banked memory + device I/O, presented to the CPU as a [`Bus`].
+/// The CPT machine: banked memory + a set of port-mapped devices, presented to the CPU as a
+/// [`Bus`].
 pub struct Machine {
     pub mem: BankedMemory,
     config: MachineConfig,
+    devices: Vec<Box<dyn Device>>,
     /// Record of writes to unmapped I/O ports, for debugging while the port map is unknown.
     pub unmapped_io: Vec<(u8, u8)>,
 }
@@ -27,8 +33,27 @@ impl Machine {
         Machine {
             mem,
             config,
+            devices: Vec::new(),
             unmapped_io: Vec::new(),
         }
+    }
+
+    /// Attach a device. Panics if any of its ports collide with the bank-select port or with a
+    /// previously attached device, since overlapping port routing would be ambiguous.
+    pub fn attach_device(&mut self, device: Box<dyn Device>) {
+        for &p in device.ports() {
+            assert_ne!(
+                p, self.config.bank_select_port,
+                "device port {:#04X} collides with the bank-select port",
+                p
+            );
+            assert!(
+                self.device_index_for_port(p).is_none(),
+                "device port {:#04X} is already claimed by another device",
+                p
+            );
+        }
+        self.devices.push(device);
     }
 
     /// The configuration this machine was built with.
@@ -39,6 +64,42 @@ impl Machine {
     /// The currently selected bank-1 block (for the debugger).
     pub fn selected_block(&self) -> usize {
         self.mem.selected_block()
+    }
+
+    /// Advance every device by `cycles` CPU cycles (called by the executive each step).
+    pub fn tick_devices(&mut self, cycles: u32) {
+        for d in &mut self.devices {
+            d.tick(cycles);
+        }
+    }
+
+    /// Poll devices for a pending interrupt, returning the first RST vector requested.
+    pub fn poll_irq(&mut self) -> Option<u8> {
+        for d in &mut self.devices {
+            if let Some(vec) = d.take_irq() {
+                return Some(vec);
+            }
+        }
+        None
+    }
+
+    /// Borrow an attached device by index (for host/UI access, e.g. the display page buffer).
+    pub fn device_mut(&mut self, index: usize) -> Option<&mut (dyn Device + 'static)> {
+        match self.devices.get_mut(index) {
+            Some(b) => Some(&mut **b),
+            None => None,
+        }
+    }
+
+    /// Number of attached devices.
+    pub fn device_count(&self) -> usize {
+        self.devices.len()
+    }
+
+    fn device_index_for_port(&self, port: u8) -> Option<usize> {
+        self.devices
+            .iter()
+            .position(|d| d.ports().contains(&port))
     }
 }
 
@@ -52,23 +113,26 @@ impl Bus for Machine {
     }
 
     fn io_in(&mut self, port: u8) -> u8 {
-        // No readable device ports modeled yet; reading the bank-select port returns the
-        // current selection for convenience/debugging. Everything else reads as 0.
         if port == self.config.bank_select_port {
-            self.mem.selected_block() as u8
-        } else {
-            0
+            return self.mem.selected_block() as u8;
         }
+        if let Some(i) = self.device_index_for_port(port) {
+            return self.devices[i].io_in(port);
+        }
+        0
     }
 
     fn io_out(&mut self, port: u8, val: u8) {
         if port == self.config.bank_select_port {
             let index = self.config.bank_select_encoding.decode(val);
             self.mem.select_block(index);
-        } else {
-            // Unmapped port: record it so we can discover the real port map later, but don't
-            // crash. (Devices will claim their ports in future increments.)
-            self.unmapped_io.push((port, val));
+            return;
         }
+        if let Some(i) = self.device_index_for_port(port) {
+            self.devices[i].io_out(port, val);
+            return;
+        }
+        // Unmapped port: record it so we can discover the real port map later, but don't crash.
+        self.unmapped_io.push((port, val));
     }
 }
