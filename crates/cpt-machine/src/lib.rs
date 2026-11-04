@@ -7,11 +7,13 @@
 
 pub mod config;
 pub mod device;
+pub mod display;
 pub mod exec;
 pub mod memory;
 
 pub use config::{BankSelectEncoding, MachineConfig};
 pub use device::Device;
+pub use display::{DisplayDevice, Layout, PageSnapshot, COLS, ROWS};
 pub use exec::Executive;
 pub use memory::{BankedMemory, BANK1_BASE, BANK_SIZE};
 
@@ -23,6 +25,10 @@ pub struct Machine {
     pub mem: BankedMemory,
     config: MachineConfig,
     devices: Vec<Box<dyn Device>>,
+    /// Memory-mapped display window: (base address, length, device index), if a display device
+    /// is attached. CPU reads/writes in `[base, base+len)` route to that device's RAM instead
+    /// of banked memory.
+    display_window: Option<(u16, u16, usize)>,
     /// Record of writes to unmapped I/O ports, for debugging while the port map is unknown.
     pub unmapped_io: Vec<(u8, u8)>,
 }
@@ -34,7 +40,39 @@ impl Machine {
             mem,
             config,
             devices: Vec::new(),
+            display_window: None,
             unmapped_io: Vec::new(),
+        }
+    }
+
+    /// Attach the memory-mapped display device, mapping its character RAM at `config.display_base`
+    /// (within bank 0). Returns the device index.
+    pub fn attach_display(&mut self, display: DisplayDevice) -> usize {
+        let base = self.config.display_base;
+        let len = display.ram_len() as u16;
+        assert!(
+            (base as u32 + len as u32) <= BANK1_BASE as u32,
+            "display RAM window must fit within bank 0 (0x0000-0x7FFF)"
+        );
+        let index = self.devices.len();
+        self.devices.push(Box::new(display));
+        self.display_window = Some((base, len, index));
+        index
+    }
+
+    /// The memory-mapped display device, if attached.
+    pub fn display_mut(&mut self) -> Option<&mut DisplayDevice> {
+        let idx = self.display_window?.2;
+        self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>()
+    }
+
+    /// If `addr` falls in the display window, return `(device_index, ram_offset)`.
+    fn display_hit(&self, addr: u16) -> Option<(usize, usize)> {
+        let (base, len, idx) = self.display_window?;
+        if addr >= base && addr < base.wrapping_add(len) {
+            Some((idx, (addr - base) as usize))
+        } else {
+            None
         }
     }
 
@@ -105,10 +143,21 @@ impl Machine {
 
 impl Bus for Machine {
     fn read(&mut self, addr: u16) -> u8 {
+        if let Some((idx, offset)) = self.display_hit(addr) {
+            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
+                return d.read_cell(offset);
+            }
+        }
         self.mem.read(addr)
     }
 
     fn write(&mut self, addr: u16, val: u8) {
+        if let Some((idx, offset)) = self.display_hit(addr) {
+            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
+                d.write_cell(offset, val);
+                return;
+            }
+        }
         self.mem.write(addr, val);
     }
 

@@ -38,6 +38,18 @@ pub struct MachineConfig {
 
     /// Which block is selected into bank 1 at power-on / reset.
     pub initial_block: usize,
+
+    /// Base address (in bank 0) of the memory-mapped display RAM. The CPU writes character
+    /// codes here; the display card reads them. [VERIFY] exact address from the system source.
+    pub display_base: u16,
+
+    /// CPU cycles between vertical-retrace interrupts. ~1/60 s of the CPU clock. The retrace
+    /// IRQ is essential: CPT's retrace handler drains the queued scroll/screen actions, so
+    /// without it the screen never updates. [VERIFY] exact clock/refresh.
+    pub retrace_period_cycles: u32,
+
+    /// RST vector the vertical-retrace interrupt uses. [VERIFY]
+    pub retrace_vector: u8,
 }
 
 impl Default for MachineConfig {
@@ -49,6 +61,10 @@ impl Default for MachineConfig {
             bank_select_encoding: BankSelectEncoding::LowBits { bits: 3 }, // 8 blocks -> 3 bits
             block_count: 8,
             initial_block: 0,
+            display_base: 0x4000, // [VERIFY] placeholder: display RAM lives in bank 0
+            // ~2 MHz 8080 / 60 Hz ≈ 33,333 cycles per frame (placeholder). [VERIFY]
+            retrace_period_cycles: 33_333,
+            retrace_vector: 1, // [VERIFY] RST 1 placeholder
         }
     }
 }

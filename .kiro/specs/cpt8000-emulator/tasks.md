@@ -43,12 +43,14 @@
   - `Executive` steps the CPU, ticks devices with elapsed cycles, and delivers a pending IRQ each step. `run_until_halt`/`run_cycles` with a terminal-halt (HLT + interrupts disabled) stop condition. Verified: timer device raises an IRQ that wakes a halted CPU and vectors to the RST handler.
   - _Requirements: 1.4, 1.5_
 
-- [ ] 6. Implement the display device and page buffer
-  - [ ] 6.1 Display memory/registers written by firmware; `page_snapshot() -> PageBuffer` (80×54).
+- [~] 6. Implement the display device and page buffer
+  - [x] 6.1 `DisplayDevice` with memory-mapped character RAM (80×~60) in bank 0; CPU writes route to it; `snapshot() -> PageSnapshot` with region layout.
     - _Requirements: 3.3, 3.1_
-  - [ ] 6.2 Keep page-oriented semantics (one page, no continuous scroll) in the buffer model.
+  - [x] 6.2 Region-structured buffer: title / top-half text / typing-line ruler / small (~8-line) bottom-half text / status lines (exact splits [VERIFY]).
     - _Requirements: 3.5_
-  - [ ] 6.3 Placeholder char set/font until the real char ROM is known ([VERIFY]).
+  - [x] 6.3 **Vertical-retrace interrupt** via `tick`/`take_irq` — essential so CPT's retrace handler drains queued scroll/screen actions; verified end-to-end (handler scrolls display driven only by the IRQ).
+    - _Requirements: 1.4, 3.3_
+  - [ ] 6.4 Placeholder char set/font until the real char ROM is known ([VERIFY]) — deferred to the UI/font layer.
     - _Requirements: 3.4_
 
 - [ ] 7. Implement the keyboard device

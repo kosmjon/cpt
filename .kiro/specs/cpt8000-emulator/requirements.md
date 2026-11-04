@@ -83,6 +83,21 @@ This is the **second** of two coordinated specs; the first is the MOL80 assemble
   scrolling terminal). **[CONFIRMED]**
 - Display was **page-white** (dark text on a white background) — unusual for the era and a
   defining visual trait. **[CONFIRMED]**
+- **Display geometry (corrected):** the frame is 80 columns × **~60 rows**, structured top to
+  bottom as: a **title line**, a large **top-half text** region, the **typing-line ruler**
+  (near the bottom), a **small (~8-line) bottom-half text** region, and **a couple of status
+  lines**. The "~54 lines of user text" is the editable area (top + bottom halves split by the
+  typing line). Exact row splits **[VERIFY]**; the structure and small-bottom-region are
+  **[CONFIRMED]**.
+- The display RAM is **memory-mapped in bank 0** (the CPU writes character codes there; the
+  display card reads them). It behaved like **dual-ported** memory on real hardware; the
+  emulator models it as a plain RAM region (CPU writes, host UI reads — no real concurrency).
+  Base address **[VERIFY]**; mapped-in-bank-0 **[CONFIRMED]**.
+- The display card provided a **vertical-retrace interrupt**. User-triggered scroll/screen
+  actions were **queued and executed in the retrace interrupt handler**. This IRQ is therefore
+  **essential**: without it the retrace handler never runs and the screen never scrolls. The
+  emulator raises a periodic retrace IRQ; the CPT handler (compiled from source) does the
+  actual scrolling. Refresh rate / RST vector **[VERIFY]**; mechanism **[CONFIRMED]**.
 - There is a **special display memory** that the current page's text is loaded into for the
   video hardware to scan. Separately, the system software is recalled to represent page text
   as a **linked-list-type structure of lines** in RAM. The likely relationship: the linked
