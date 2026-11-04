@@ -72,6 +72,45 @@ impl PageSnapshot {
     pub fn cell(&self, row: usize, col: usize) -> u8 {
         self.cells[row * self.cols + col]
     }
+
+    /// Render the frame as human-readable text for a terminal, with labeled region dividers so
+    /// the title / top-half / typing-line / bottom-half / status structure is visible. Non-
+    /// printable character codes render as '.'; code 0 renders as space (blank cell).
+    pub fn render_text(&self) -> String {
+        let l = self.layout;
+        let mut out = String::new();
+        let rule = |out: &mut String, label: &str| {
+            out.push_str(&format!("     +{:-<width$}+  {}\n", "", label, width = self.cols));
+        };
+
+        rule(&mut out, "title");
+        for row in 0..self.rows {
+            // Insert region dividers at the boundaries.
+            if row == l.top_text.0 {
+                rule(&mut out, "top-half text");
+            } else if row == l.typing_row {
+                rule(&mut out, "TYPING LINE");
+            } else if row == l.bottom_text.0 {
+                rule(&mut out, "bottom-half text");
+            } else if row == l.status.0 {
+                rule(&mut out, "status");
+            }
+
+            let line: String = (0..self.cols)
+                .map(|c| {
+                    let ch = self.cell(row, c);
+                    match ch {
+                        0 => ' ',
+                        0x20..=0x7E => ch as char,
+                        _ => '.',
+                    }
+                })
+                .collect();
+            out.push_str(&format!("{:>3}: |{}|\n", row, line));
+        }
+        rule(&mut out, "");
+        out
+    }
 }
 
 pub struct DisplayDevice {
@@ -84,7 +123,10 @@ pub struct DisplayDevice {
     retrace_vector: u8,
     cycle_accum: u32,
     retrace_pending: bool,
-    /// Count of retrace interrupts raised (useful for tests / a frame counter).
+    /// Count of retrace interrupts *raised* (consumed via `take_irq`). Note this counts IRQs
+    /// the device requested, not necessarily ones the CPU serviced: if the retrace handler runs
+    /// longer than one retrace period, interrupts raised while it executes (with interrupts
+    /// disabled) are not accepted by the CPU, so serviced scrolls can be fewer than this count.
     pub retrace_count: u64,
 }
 

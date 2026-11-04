@@ -62,6 +62,10 @@ cargo run -p cpt-run -- --trace --steps 100 program.bin
 # End-to-end: assemble MOL80, then run the result on the machine:
 cargo run -p mol80asm -- --bin out.bin mol80asm/examples/sample.mol
 cargo run -p cpt-run -- --trace --steps 20 out.bin
+
+# Display demo: draws the title / text / typing-line ruler / status regions, and the
+# vertical-retrace interrupt handler scrolls the text (give it enough steps to retrace):
+cargo run -p cpt-run -- --demo --steps 40000
 ```
 
 ## Specs

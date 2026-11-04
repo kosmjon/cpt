@@ -17,9 +17,13 @@ use cpt_machine::{Executive, Machine, MachineConfig};
 use i8080_cpu::{Bus, Cpu};
 use std::process::ExitCode;
 
+mod demo;
+
 struct Options {
     file: String,
     trace: bool,
+    display: bool,
+    demo: bool,
     load_addr: u16,
     max_steps: u64,
 }
@@ -29,6 +33,8 @@ fn parse_args() -> Result<Options, String> {
     let mut opts = Options {
         file: String::new(),
         trace: false,
+        display: false,
+        demo: false,
         load_addr: 0x0000,
         max_steps: 1_000_000,
     };
@@ -36,6 +42,11 @@ fn parse_args() -> Result<Options, String> {
     while i < args.len() {
         match args[i].as_str() {
             "--trace" => opts.trace = true,
+            "--display" => opts.display = true,
+            "--demo" => {
+                opts.demo = true;
+                opts.display = true;
+            }
             "--load" => {
                 i += 1;
                 opts.load_addr = parse_u16(args.get(i).ok_or("--load needs an address")?)?;
@@ -53,7 +64,7 @@ fn parse_args() -> Result<Options, String> {
         }
         i += 1;
     }
-    if opts.file.is_empty() {
+    if opts.file.is_empty() && !opts.demo {
         return Err("no input file given".into());
     }
     Ok(opts)
@@ -79,16 +90,29 @@ fn main() -> ExitCode {
         }
     };
 
-    let program = match std::fs::read(&opts.file) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: cannot read {}: {}", opts.file, e);
-            return ExitCode::FAILURE;
+    // The demo supplies its own built-in program; otherwise read the file.
+    let (program, load_addr) = if opts.demo {
+        (demo::display_demo(), 0x0100u16)
+    } else {
+        match std::fs::read(&opts.file) {
+            Ok(p) => (p, opts.load_addr),
+            Err(e) => {
+                eprintln!("error: cannot read {}: {}", opts.file, e);
+                return ExitCode::FAILURE;
+            }
         }
     };
+    let opts = Options { load_addr, ..opts };
 
     // Build the machine and load the program into bank 0 at the requested address.
-    let mut machine = Machine::new(MachineConfig::default());
+    let cfg = MachineConfig::default();
+    let mut machine = Machine::new(cfg.clone());
+    if opts.display {
+        machine.attach_display(cpt_machine::DisplayDevice::new(
+            cfg.retrace_period_cycles,
+            cfg.retrace_vector,
+        ));
+    }
     if (opts.load_addr as usize + program.len()) > 0x8000 {
         eprintln!(
             "error: program of {} bytes at {:#06X} does not fit in bank 0 (0x0000-0x7FFF)",
@@ -121,6 +145,16 @@ fn main() -> ExitCode {
         }
         exec.step();
         steps += 1;
+    }
+
+    // Render the display frame if one was attached.
+    if opts.display {
+        if let Some(d) = exec.machine.display_mut() {
+            let retraces = d.retrace_count;
+            let frame = d.snapshot().render_text();
+            println!("\n=== display ({} vertical-retrace interrupts) ===", retraces);
+            print!("{}", frame);
+        }
     }
 
     // Summary.
