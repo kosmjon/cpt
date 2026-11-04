@@ -1,0 +1,17 @@
+START     5:A                             load immediate 5 into A
+          A:B                             move A to B
+          C:(HL)                          store C into memory at HL
+          A+B:A                           add B to A
+          A+*C:A                          AND C into A
+          A-*D:A                          OR D into A
+          A**E:A                          XOR E into A
+          HL:STK                          push HL
+          CALL(SUB)                       call subroutine SUB
+          STK:HL                          pop HL
+LOOP      A-1:A                           decrement A (A - 1 -> A)
+          FZ=1? /DONE                     jump to DONE if zero flag set
+          /LOOP                           unconditional jump back to LOOP
+DONE      A=B? (D:B  E:C)                 if A==B then do the two moves
+          /START                          loop forever
+SUB       B:A                             subroutine body: move B to A
+          RTN                             return

@@ -1,0 +1,13 @@
+[package]
+name = "mol80asm"
+version = "0.1.0"
+edition = "2021"
+description = "Assembler/transpiler for CPT Corporation's MOL80 (Machine-Oriented Language for the 8080)"
+
+[[bin]]
+name = "mol80asm"
+path = "src/main.rs"
+
+[lib]
+name = "mol80asm"
+path = "src/lib.rs"

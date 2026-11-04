@@ -1,0 +1,12 @@
+# Rust build artifacts
+/mol80asm/target/
+target/
+**/*.rs.bk
+
+# Assembler output
+*.bin
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp

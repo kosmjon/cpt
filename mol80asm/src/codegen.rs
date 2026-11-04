@@ -1,0 +1,311 @@
+//! Two-pass code generation: AST -> 8080 machine code.
+//!
+//! Strategy: lower the AST into a flat list of [`Emit`] units. Each unit has a known size, so
+//! pass 1 assigns addresses to labels by summing sizes, and pass 2 resolves label references
+//! (now that all addresses are known) and produces the final byte image. Forward references
+//! therefore work (Req 3.3).
+//!
+//! The structured constructs are lowered here:
+//!   * `Fx=v? /target`      -> conditional JMP to target.
+//!   * `cond ? ( body )`    -> compare + INVERTED conditional branch to an internal label
+//!                             placed after the body, so the body runs only when cond holds.
+
+use crate::ast::*;
+use crate::diag::{Diagnostic, Diagnostics};
+use crate::isa::table::PCHL;
+use crate::isa::{
+    cmp_reg, cond_jump, cond_return, encode_alu, encode_dad, encode_dcx, encode_exchange,
+    encode_inx, encode_move, pop_opcode, push_opcode, CALL, JMP, RET,
+};
+use crate::symbols::SymbolTable;
+use crate::token::{FlagKind, Reg, Span};
+
+/// Origin address for assembly (default 0). A future ORG directive will set this.
+const DEFAULT_ORG: u16 = 0;
+
+/// A lowered emission unit.
+#[derive(Debug, Clone)]
+enum Emit {
+    /// Literal bytes, known at lowering time.
+    Bytes(Vec<u8>),
+    /// A 3-byte control instruction (opcode + 16-bit address) whose address is a label.
+    /// Resolved in pass 2.
+    AddrRef { opcode: u8, label: String, span: Span },
+    /// Marks where an internal/user label resolves to the current address. Zero bytes.
+    LabelDef(String),
+}
+
+impl Emit {
+    fn size(&self) -> u16 {
+        match self {
+            Emit::Bytes(b) => b.len() as u16,
+            Emit::AddrRef { .. } => 3,
+            Emit::LabelDef(_) => 0,
+        }
+    }
+}
+
+/// Output of a successful assembly.
+pub struct Assembly {
+    pub origin: u16,
+    pub bytes: Vec<u8>,
+}
+
+/// Assemble a parsed program into bytes, collecting diagnostics. Returns `None` if errors
+/// occurred (no partial binary is returned as if complete — Req 6.4).
+pub fn assemble(program: &Program, diags: &mut Diagnostics) -> Option<Assembly> {
+    let mut symbols = SymbolTable::new();
+    let mut emits: Vec<Emit> = Vec::new();
+
+    // --- Lowering: AST -> flat Emit list, allocating internal labels as needed. ---
+    for line in &program.lines {
+        lower_line(line, &mut emits, &mut symbols, diags);
+    }
+    if diags.has_errors() {
+        return None;
+    }
+
+    // --- Pass 1: assign addresses to every LabelDef by summing sizes. ---
+    let origin = DEFAULT_ORG;
+    let mut addr = origin;
+    for e in &emits {
+        if let Emit::LabelDef(name) = e {
+            // Internal labels (prefixed '@') and user labels share the same table.
+            symbols.define(name, addr, Span::new(0, 0, 0), diags);
+        }
+        addr = addr.wrapping_add(e.size());
+    }
+    if diags.has_errors() {
+        return None;
+    }
+
+    // --- Pass 2: resolve references and emit bytes. ---
+    let mut bytes = Vec::new();
+    for e in &emits {
+        match e {
+            Emit::Bytes(b) => bytes.extend_from_slice(b),
+            Emit::LabelDef(_) => {}
+            Emit::AddrRef { opcode, label, span } => {
+                match symbols.get(label) {
+                    Some(a) => {
+                        bytes.push(*opcode);
+                        bytes.push((a & 0xFF) as u8); // little-endian low byte
+                        bytes.push((a >> 8) as u8); // high byte
+                    }
+                    None => {
+                        diags.push(
+                            Diagnostic::error(
+                                format!("undefined label '{}'", label),
+                                *span,
+                            )
+                            .with_snippet(label.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if diags.has_errors() {
+        return None;
+    }
+
+    Some(Assembly { origin, bytes })
+}
+
+fn lower_line(
+    line: &Line,
+    emits: &mut Vec<Emit>,
+    symbols: &mut SymbolTable,
+    diags: &mut Diagnostics,
+) {
+    if let Some(label) = &line.label {
+        emits.push(Emit::LabelDef(label.clone()));
+    }
+    lower_item(&line.item, line.span, emits, symbols, diags);
+}
+
+fn lower_item(
+    item: &Item,
+    span: Span,
+    emits: &mut Vec<Emit>,
+    symbols: &mut SymbolTable,
+    diags: &mut Diagnostics,
+) {
+    match item {
+        Item::Empty => {}
+
+        Item::Move { src, dst } => match encode_move(src, dst) {
+            Ok(b) => emits.push(Emit::Bytes(b)),
+            Err(e) => diags.push(Diagnostic::error(format!("{:?}", e), span)),
+        },
+
+        Item::AluOp { op, lhs, rhs, dst } => match encode_alu(*op, lhs, rhs, dst) {
+            Ok(b) => emits.push(Emit::Bytes(b)),
+            Err(e) => diags.push(Diagnostic::error(format!("{:?}", e), span)),
+        },
+
+        Item::Jump { target } => lower_jump(JMP, target, span, emits, diags),
+
+        Item::CondJump { flag, value, target } => {
+            let info = cond_jump(*flag, *value);
+            lower_jump(info.opcode, target, span, emits, diags);
+        }
+
+        Item::CondBlock { cond, body } => {
+            lower_cond_block(cond, body, span, emits, symbols, diags);
+        }
+
+        Item::Call { target } => lower_jump(CALL, target, span, emits, diags),
+
+        Item::Return => emits.push(Emit::Bytes(vec![RET])),
+
+        Item::CondReturn { flag, value } => {
+            let info = cond_return(*flag, *value);
+            emits.push(Emit::Bytes(vec![info.opcode]));
+        }
+
+        Item::Push { rp } => match push_opcode(*rp) {
+            Some(op) => emits.push(Emit::Bytes(vec![op])),
+            None => diags.push(Diagnostic::error(
+                format!("cannot PUSH {:?} (expected BC/DE/HL/PSW)", rp),
+                span,
+            )),
+        },
+
+        Item::Pop { rp } => match pop_opcode(*rp) {
+            Some(op) => emits.push(Emit::Bytes(vec![op])),
+            None => diags.push(Diagnostic::error(
+                format!("cannot POP {:?} (expected BC/DE/HL/PSW)", rp),
+                span,
+            )),
+        },
+
+        Item::JumpHL => emits.push(Emit::Bytes(vec![PCHL])),
+
+        Item::Exchange { first, second } => emit_or_err(encode_exchange(*first, *second), span, emits, diags),
+
+        Item::IncPair { rp } => emit_or_err(encode_inx(*rp), span, emits, diags),
+
+        Item::DecPair { rp } => emit_or_err(encode_dcx(*rp), span, emits, diags),
+
+        Item::AddPair { rp } => emit_or_err(encode_dad(*rp), span, emits, diags),
+    }
+}
+
+/// Push encoded bytes, or record the encode error as a diagnostic.
+fn emit_or_err(
+    res: Result<Vec<u8>, crate::isa::EncodeError>,
+    span: Span,
+    emits: &mut Vec<Emit>,
+    diags: &mut Diagnostics,
+) {
+    match res {
+        Ok(b) => emits.push(Emit::Bytes(b)),
+        Err(e) => diags.push(Diagnostic::error(format!("{:?}", e), span)),
+    }
+}
+
+fn lower_jump(
+    opcode: u8,
+    target: &JumpTarget,
+    span: Span,
+    emits: &mut Vec<Emit>,
+    _diags: &mut Diagnostics,
+) {
+    match target {
+        JumpTarget::Label(name) => emits.push(Emit::AddrRef {
+            opcode,
+            label: name.clone(),
+            span,
+        }),
+        JumpTarget::Addr(a) => {
+            let v = *a as u16;
+            emits.push(Emit::Bytes(vec![opcode, (v & 0xFF) as u8, (v >> 8) as u8]));
+        }
+    }
+}
+
+/// Lower `cond ? ( body )`:
+///   <compare for cond>
+///   <conditional branch to @end when cond is FALSE>   (inverted sense)
+///   <body>
+///   @end:
+fn lower_cond_block(
+    cond: &Condition,
+    body: &[Line],
+    span: Span,
+    emits: &mut Vec<Emit>,
+    symbols: &mut SymbolTable,
+    diags: &mut Diagnostics,
+) {
+    let end_label = symbols.fresh_internal();
+
+    match cond {
+        // Flag test: branch past the body when the flag does NOT hold (invert the value).
+        Condition::Flag { flag, value } => {
+            let inverted = if *value == 1 { 0 } else { 1 };
+            let info = cond_jump(*flag, inverted);
+            emits.push(Emit::AddrRef {
+                opcode: info.opcode,
+                label: end_label.clone(),
+                span,
+            });
+        }
+        // Register comparison, currently only equality `A=r`: CMP r, then JNZ @end
+        // (skip the body when A != r). Other comparison operators await confirmation.
+        Condition::Compare { lhs, rhs } => {
+            lower_compare_eq(lhs, rhs, &end_label, span, emits, diags);
+        }
+    }
+
+    // Body.
+    for line in body {
+        lower_line(line, emits, symbols, diags);
+    }
+
+    // End marker.
+    emits.push(Emit::LabelDef(end_label));
+}
+
+/// Lower an equality comparison `A = rhs` into `CMP rhs` and set up a JNZ-to-end branch.
+/// Emits the CMP here; the branch (JNZ @end) is pushed by the caller via this helper.
+fn lower_compare_eq(
+    lhs: &Operand,
+    rhs: &Operand,
+    end_label: &str,
+    span: Span,
+    emits: &mut Vec<Emit>,
+    diags: &mut Diagnostics,
+) {
+    // Only `A = <reg>` is supported for now.
+    let a_is_lhs = matches!(lhs, Operand::Reg(Reg::A));
+    let rhs_reg = match rhs {
+        Operand::Reg(r) => Some(*r),
+        _ => None,
+    };
+
+    match (a_is_lhs, rhs_reg) {
+        (true, Some(r)) => match cmp_reg(r) {
+            Some(cmp) => {
+                emits.push(Emit::Bytes(vec![cmp]));
+                // Skip body when NOT equal -> JNZ @end (zero flag clear means not equal).
+                let info = cond_jump(FlagKind::Z, 0); // JNZ
+                emits.push(Emit::AddrRef {
+                    opcode: info.opcode,
+                    label: end_label.to_string(),
+                    span,
+                });
+            }
+            None => diags.push(Diagnostic::error(
+                format!("cannot compare against {:?}", r),
+                span,
+            )),
+        },
+        _ => diags.push(Diagnostic::error(
+            "only 'A = <register>' comparisons are supported so far".to_string(),
+            span,
+        )),
+    }
+}
+
+
