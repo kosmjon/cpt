@@ -6,18 +6,18 @@
     disassembler and the assembler's transpiler use one table.
   - _Requirements: 9.4_
 
-- [ ] 2. Implement the 8080 CPU core (`i8080-cpu`)
-  - [ ] 2.1 Define `Cpu` state (registers, SP, PC, PSW flags, interrupt-enable) and the `Bus` trait.
+- [x] 2. Implement the 8080 CPU core (`i8080-cpu`)
+  - [x] 2.1 `Cpu` state (registers, SP, PC, `Flags`, interrupt-enable, halted, cycles) and the `Bus` trait (+ `FlatMemory` for tests).
     - _Requirements: 1.1, 1.3_
-  - [ ] 2.2 Implement instruction decode + execution for all documented opcodes with correct register/memory effects.
+  - [x] 2.2 Decode + execute all 256 opcodes (incl. documented NOP/JMP/CALL/RET aliases) with correct register/memory effects.
     - _Requirements: 1.1_
-  - [ ] 2.3 Implement flag computation (carry, zero, sign, parity, aux carry) per spec.
+  - [x] 2.3 Flag computation (S/Z/AC/P/CY), including DAA and the ANA aux-carry quirk.
     - _Requirements: 1.2_
-  - [ ] 2.4 Implement stack ops (PUSH/POP/CALL/RET) and SP behavior.
+  - [x] 2.4 Stack ops (PUSH/POP/CALL/RET/XTHL/RST) and SP behavior.
     - _Requirements: 1.3_
-  - [ ] 2.5 Implement the interrupt model (`interrupt`/RST) and return cycle counts from `step`.
+  - [x] 2.5 Interrupt model (`interrupt(rst_vector)`, HLT wake) and per-instruction cycle counts from `step`.
     - _Requirements: 1.4, 1.5_
-  - [ ] 2.6 CPU conformance: run a standard 8080 diagnostic suite headless and assert results.
+  - [x] 2.6 Conformance: 8080PRE, TST8080, CPUTEST all pass; **8080EXM exhaustive exerciser passes every CRC group** (release, ~15s). Plus 15 focused unit tests.
     - _Requirements: 1.1, 1.2, 1.3_
 
 - [ ] 3. Implement banked memory (`cpt-machine`)

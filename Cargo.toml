@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+    "mol80asm",
+    "crates/i8080-cpu",
+]

@@ -1,0 +1,9 @@
+[package]
+name = "i8080-cpu"
+version = "0.1.0"
+edition = "2021"
+description = "A pure, hardware-agnostic Intel 8080 CPU emulator core"
+
+[lib]
+name = "i8080_cpu"
+path = "src/lib.rs"
