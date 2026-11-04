@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "cpt-machine"
+version = "0.1.0"
+dependencies = [
+ "i8080-cpu",
+]
+
+[[package]]
 name = "i8080-cpu"
 version = "0.1.0"
 dependencies = [

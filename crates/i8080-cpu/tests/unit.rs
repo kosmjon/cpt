@@ -1,7 +1,7 @@
 //! Focused unit tests for the 8080 core. The exhaustive coverage comes from the CP/M
 //! diagnostics (see `conformance.rs`); these pin down specific behaviors and flag edge cases.
 
-use i8080_cpu::{Bus, Cpu, FlatMemory};
+use i8080_cpu::{Cpu, FlatMemory};
 
 /// Assemble a tiny program at 0x0000, run `n` instructions, return the CPU.
 fn run(program: &[u8], n: usize) -> (Cpu, FlatMemory) {

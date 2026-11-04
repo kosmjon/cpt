@@ -19,24 +19,24 @@
   - [x] 2.6 Conformance: 8080PRE, TST8080, CPUTEST all pass; **8080EXM exhaustive exerciser passes every CRC group** (release, ~15s). Plus 15 focused unit tests.
     - _Requirements: 1.1, 1.2, 1.3_
 
-- [ ] 3. Implement banked memory (`cpt-machine`)
-  - [ ] 3.1 `BankedMemory` with resident bank 0 and a vector of physical 32K blocks for bank 1.
+- [x] 3. Implement banked memory (`cpt-machine`)
+  - [x] 3.1 `BankedMemory` with resident bank 0 and a vector of physical 32K blocks for bank 1.
     - _Requirements: 2.1, 2.2_
-  - [ ] 3.2 Address routing: <0x8000 → bank 0; ≥0x8000 → selected block at offset.
+  - [x] 3.2 Address routing: <0x8000 → bank 0; ≥0x8000 → selected block at offset.
     - _Requirements: 2.1, 2.2, 2.4_
-  - [ ] 3.3 Bank-select via `io_out` to the configured port; de-selected blocks persist.
+  - [x] 3.3 Bank-select via `io_out` to the configured port; de-selected blocks persist (verified end-to-end with the CPU executing an OUT).
     - _Requirements: 2.3, 2.4_
-  - [ ] 3.4 Optional ROM-region write protection for bank 0 ([VERIFY] which regions).
+  - [x] 3.4 Bank 0 is all RAM, so no ROM write-protection is modeled (per the confirmed memory model).
     - _Requirements: 2.6_
-  - [ ] 3.5 Tests: remap on bank write, persistence of de-selected blocks across swaps.
+  - [x] 3.5 Tests: remap on bank write, persistence of de-selected blocks across swaps, CPU-driven OUT, encoding mask, initial selection (8 tests).
     - _Requirements: 2.3, 2.4_
 
-- [ ] 4. Define `MachineConfig` and the bus/device dispatch
-  - [ ] 4.1 `MachineConfig` centralizing all [VERIFY] port assignments and block count.
+- [~] 4. Define `MachineConfig` and the bus/device dispatch
+  - [x] 4.1 `MachineConfig` centralizing the bank-select port, encoding, block count, and initial block ([VERIFY] device ports to be added with each device).
     - _Requirements: 2.3, 2.5_
-  - [ ] 4.2 Implement `Bus` on `cpt-machine`, routing I/O ports to devices; unmapped ports log and no-op safely.
+  - [x] 4.2 `Bus` implemented on `Machine`, routing the bank-select port; unmapped ports recorded (not crashed) for later discovery.
     - _Requirements: 2.5_
-  - [ ] 4.3 Define the `Device` trait (io_in/io_out/tick/take_irq).
+  - [ ] 4.3 Define the `Device` trait (io_in/io_out/tick/take_irq). — next, with the first device
     - _Requirements: 2.5, 1.4_
 
 - [ ] 5. Implement the executive loop and interrupts

@@ -1,0 +1,12 @@
+[package]
+name = "cpt-machine"
+version = "0.1.0"
+edition = "2021"
+description = "CPT workstation hardware model: banked memory, bus, and devices for the 8080 core"
+
+[lib]
+name = "cpt_machine"
+path = "src/lib.rs"
+
+[dependencies]
+i8080-cpu = { path = "../i8080-cpu" }
