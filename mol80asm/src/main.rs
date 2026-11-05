@@ -18,10 +18,11 @@ fn main() -> ExitCode {
         [flag, path] if flag == "--tokens" => run_tokens(path),
         [flag, path] if flag == "--ast" => run_ast(path),
         [flag, path] if flag == "--asm" => run_asm(path),
+        [flag, path] if flag == "--reloc" => run_reloc(path),
         [flag, out, path] if flag == "--bin" => run_bin(path, out),
         [path] => run_listing(path),
         _ => {
-            eprintln!("usage: mol80asm [--tokens|--ast|--asm|--bin <out>] <file.mol>");
+            eprintln!("usage: mol80asm [--tokens|--ast|--asm|--reloc|--bin <out>] <file.mol>");
             return ExitCode::from(2);
         }
     };
@@ -61,6 +62,19 @@ fn run_asm(path: &str) -> Result<(), ()> {
     let out = mol80asm::transpile_source(path, &src);
     if let Some(asm) = &out.asm {
         print!("{}", asm);
+    }
+    report(&out.diags)
+}
+
+fn run_reloc(path: &str) -> Result<(), ()> {
+    let src = read(path)?;
+    let out = mol80asm::assemble_source(path, &src);
+    if let Some(asm) = &out.assembly {
+        println!("origin: {:04X}H   {} byte(s)   {} relocation(s)", asm.origin, asm.bytes.len(), asm.relocations.len());
+        println!("OFFSET  WIDTH  SYMBOL");
+        for r in &asm.relocations {
+            println!("{:04X}    {:>5}  {}", r.offset, r.width, r.symbol);
+        }
     }
     report(&out.diags)
 }

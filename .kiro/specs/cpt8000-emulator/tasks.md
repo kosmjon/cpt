@@ -66,8 +66,18 @@
   - [ ] 8.3 Exercise the B-tree filer (Segment 12) against the data disk once the system builds, and replace the placeholder protocol with the real one.
     - _Requirements: 6.4_
 
-- [ ] 9. Link-editor and system image (`cpt-link`)
-  - [ ] 9.1 Consume `mol80asm` relocatable objects (symbols, references, `bank0` tag).
+- [ ] 9. Link-editor and system image (`cpt-link`) — **BLOCKED on the MOL80 object-module
+      model** (local/public symbols, intra-segment-call vs. long-call, relocation records; see
+      assembler requirements "MOL80 modules, relocation, and the object format"). Do NOT build
+      until those are known — the object format and relocation model that define a linker all
+      derive from them. Bin-packing is the only source-independent part. The one piece of
+      non-speculative groundwork is 9.0 below.
+  - [x] 9.0 (groundwork, not blocked) `mol80asm` emits **relocation records** (`Relocation {
+        offset, width, symbol }`) for every origin-relative 16-bit address — i.e. addresses
+        resolved from in-module labels; literal addresses get none. `Assembly.relocations` +
+        `--reloc` CLI dump. Tested. This is the one piece any relocatable scheme needs regardless
+        of MOL80's eventual object format.
+  - [ ] 9.1 Consume `mol80asm` relocatable objects (symbols, references, `bank0` tag). [BLOCKED]
     - _Requirements: 7.1_
   - [ ] 9.2 Place `bank0`-tagged segments in the resident 32K; error on overflow. Reserve the work-block heap region ([VERIFY] from allocator source).
     - _Requirements: 7.2, 7a.1_

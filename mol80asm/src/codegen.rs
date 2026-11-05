@@ -45,10 +45,29 @@ impl Emit {
     }
 }
 
+/// A relocation record: a 16-bit address in the output that is relative to the module's origin
+/// and must be adjusted when a linker places the module at a different base.
+///
+/// This is linker groundwork. The exact MOL80 object-module format is unknown ([VERIFY]), but
+/// *any* relocatable scheme needs this information, so emitting it now is not a guess. Only
+/// addresses derived from **in-module labels** are relocatable; addresses written as literal
+/// constants by the programmer are absolute and get no record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relocation {
+    /// Byte offset within `Assembly.bytes` of the low byte of the 16-bit address to patch.
+    pub offset: u16,
+    /// Width in bytes of the address field (always 2 for the current 8080 forms).
+    pub width: u8,
+    /// The label the address was resolved from (for debugging / listings).
+    pub symbol: String,
+}
+
 /// Output of a successful assembly.
 pub struct Assembly {
     pub origin: u16,
     pub bytes: Vec<u8>,
+    /// Relocation records for the linker: positions of origin-relative 16-bit addresses.
+    pub relocations: Vec<Relocation>,
 }
 
 /// Assemble a parsed program into bytes, collecting diagnostics. Returns `None` if errors
@@ -79,8 +98,9 @@ pub fn assemble(program: &Program, diags: &mut Diagnostics) -> Option<Assembly> 
         return None;
     }
 
-    // --- Pass 2: resolve references and emit bytes. ---
+    // --- Pass 2: resolve references, emit bytes, and record relocations. ---
     let mut bytes = Vec::new();
+    let mut relocations = Vec::new();
     for e in &emits {
         match e {
             Emit::Bytes(b) => bytes.extend_from_slice(b),
@@ -89,8 +109,16 @@ pub fn assemble(program: &Program, diags: &mut Diagnostics) -> Option<Assembly> 
                 match symbols.get(label) {
                     Some(a) => {
                         bytes.push(*opcode);
+                        // The 16-bit address starts here; this position is origin-relative, so
+                        // record a relocation for the linker before writing the bytes.
+                        let addr_offset = bytes.len() as u16;
                         bytes.push((a & 0xFF) as u8); // little-endian low byte
                         bytes.push((a >> 8) as u8); // high byte
+                        relocations.push(Relocation {
+                            offset: addr_offset,
+                            width: 2,
+                            symbol: label.clone(),
+                        });
                     }
                     None => {
                         diags.push(
@@ -109,7 +137,11 @@ pub fn assemble(program: &Program, diags: &mut Diagnostics) -> Option<Assembly> 
         return None;
     }
 
-    Some(Assembly { origin, bytes })
+    Some(Assembly {
+        origin,
+        bytes,
+        relocations,
+    })
 }
 
 fn lower_line(

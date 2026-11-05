@@ -20,6 +20,8 @@ use diag::Diagnostics;
 use lexer::Lexer;
 use parser::Parser;
 
+pub use codegen::Relocation;
+
 /// Result of a front-end run: the parsed program and any diagnostics collected.
 pub struct ParseOutput {
     pub program: Program,

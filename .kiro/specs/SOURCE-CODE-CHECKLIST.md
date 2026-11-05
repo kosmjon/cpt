@@ -24,6 +24,18 @@ Status tags used in the specs:
 - [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists.
 - [ ] 8. The full verified table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 (256 entries).
 - [ ] 9. Operand expression syntax (e.g. `LABEL+2` arithmetic on labels/constants).
+- [ ] 9b. **Module / object-module model** (gates the linker — see "Linker is blocked" below):
+      - [ ] 9b-i.  Local vs. public symbols within a module: MOL80 had **module-local symbols**;
+                   what is the rule for which symbols are local vs. visible to other modules?
+      - [ ] 9b-ii. The **intra-segment call** syntax (a call within the same segment, resolved
+                   to a relocatable address) vs. a cross-segment **long-call** (through the
+                   bank-0 handler). Knowing this determines the relocation/fixup record set.
+      - [ ] 9b-iii. **Relocation model:** most code was relocatable, so the assembler must emit
+                   relocation records (which byte positions hold addresses that shift when the
+                   module is placed). What is relocatable vs. absolute? Segment-relative or
+                   fully relocatable? This is the substance of the object-module format.
+      - [ ] 9b-iv. The object-module file format MOL80's tools produced (symbols, relocations,
+                   segment tag, entry points) — i.e. exactly what the linker consumes.
 - [ ] 10. **Layer-2 expansion / pseudo-instruction set** (the big one): all MOL80 syntax that
       expands to more than one 8080 instruction. Including:
       - [ ] 10a. The `using` `<reg>` clause and `(HL+offset)` page-aligned array addressing;
@@ -56,6 +68,17 @@ Status tags used in the specs:
 - [ ] M3. Bank-switch timing (effect on next fetch; any guard against self-swap-out).
 
 ### Link / image build (from the system source)
+
+> **The linker (`cpt-link`) is blocked and should not be built yet.** A linker is defined by the
+> object-module format — local/public symbols, relocation records, the intra-segment-call vs.
+> long-call distinction — and all of that is determined by how MOL80 actually worked (see
+> assembler items 9b-i..iv), which we don't know. Bin-packing is the only source-independent
+> part and is a small piece. Building the linker now would mean inventing (and later discarding)
+> an object format and relocation model. The one useful groundwork that is NOT a guess: teach
+> `mol80asm` to emit **relocation records** (positions holding segment-relative addresses),
+> which any relocatable scheme needs regardless of MOL80's exact format. Defer the rest until
+> the manual/source arrives.
+
 - [ ] S1. Segment → (bank, offset) table format the long-call handler reads (linker generates it).
 - [ ] S2. Long-call calling convention (how segment# and subroutine name are passed).
 - [ ] S3. Which segments are `bank0`-tagged vs. relocatable; the tagging mechanism; bank-0 footprint.

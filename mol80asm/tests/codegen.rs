@@ -115,6 +115,50 @@ fn duplicate_label_errors() {
     assert!(msg.contains("duplicate label 'FOO'"), "got: {}", msg);
 }
 
+// --- relocation records (linker groundwork) ---
+
+/// Assemble and return the Assembly (bytes + relocations), asserting no diagnostics.
+fn asm_full(src: &str) -> mol80asm::codegen::Assembly {
+    let out = mol80asm::assemble_source("t.mol", src);
+    assert!(out.diags.is_empty(), "{}", out.diags.render());
+    out.assembly.unwrap()
+}
+
+#[test]
+fn label_jump_produces_a_relocation() {
+    // /DONE ; DONE A:B   -> JMP's address bytes (offset 1) are origin-relative.
+    let a = asm_full("          /DONE\nDONE      A:B\n");
+    assert_eq!(a.relocations.len(), 1);
+    let r = &a.relocations[0];
+    assert_eq!(r.offset, 1); // after the 0xC3 opcode
+    assert_eq!(r.width, 2);
+    assert_eq!(r.symbol, "DONE");
+    // The byte at the relocation offset is the resolved address (DONE = 0x0003).
+    assert_eq!(a.bytes[r.offset as usize], 0x03);
+}
+
+#[test]
+fn literal_address_is_not_relocated() {
+    // A jump to a literal numeric address is absolute — the programmer wrote a fixed address,
+    // so it must NOT get a relocation record.
+    let a = asm_full("          /1234H\n");
+    // (depends on hex radix placeholder: 1234H) -> JMP 0x1234, no relocation.
+    assert!(a.relocations.is_empty(), "literal address must not be relocatable");
+    assert_eq!(a.bytes, vec![0xC3, 0x34, 0x12]);
+}
+
+#[test]
+fn relocations_cover_all_label_addresses() {
+    // Each label-derived 16-bit address gets exactly one 2-byte relocation. (Label names avoid
+    // single letters, which lex as registers.)
+    let a = asm_full("          /FOO\n          /BAR\nFOO       /BAR\nBAR       A:C\n");
+    // /FOO, /BAR, /BAR -> 3 label references, 3 relocations.
+    assert_eq!(a.relocations.len(), 3);
+    assert!(a.relocations.iter().all(|r| r.width == 2));
+    // Every relocation offset points inside the byte image.
+    assert!(a.relocations.iter().all(|r| (r.offset as usize) < a.bytes.len()));
+}
+
 /// The full sample program assembles to the hand-verified byte image.
 #[test]
 fn sample_program_image() {

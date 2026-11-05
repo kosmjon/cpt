@@ -41,6 +41,24 @@ which will execute the code this tool produces.
 - 16-bit pair ops: `rp+1:rp` = INX, `rp-1:rp` = DCX, `HL+rp:HL` = DAD, `HL*2:HL` = DAD H,
   `HL:SP` = SPHL. **[CONFIRMED from scan]**
 
+### MOL80 modules, relocation, and the object format (gates the linker)
+
+- MOL80 code was organized into **modules** with **module-local symbols** — symbols private to a
+  module, distinct from those visible/exported to other modules. The exact local-vs-public rule
+  is **[VERIFY]**. **[CONFIRMED that local symbols exist]**
+- There was a **special syntax to mark an intra-segment call** (a call within the same segment,
+  which resolves to a relocatable in-segment address) as distinct from a cross-segment
+  **long-call** (routed through the bank-0 long-call handler). Exact syntax **[VERIFY]**.
+  **[CONFIRMED that the distinction exists]**
+- **Most code had to be relocatable**, so the assembler must emit **relocation records** (which
+  byte positions hold addresses that shift when the module is placed), not just a flat absolute
+  binary. The current assembler emits absolute bytes only; a relocation model is future work.
+  **[CONFIRMED]**
+- **Linker dependency:** the link-editor (`cpt-link`, in the emulator spec) is **blocked** on
+  these facts — the object-module format (symbols, relocations, segment tag, entry points) is
+  defined by them. The linker should not be built until they are known. The one piece of
+  non-speculative groundwork is emitting relocation records from `mol80asm`. **[CONFIRMED]**
+
 ### MOL80 has TWO layers (important architectural finding)
 
 - **Layer 1 — primitives:** the MOL80 syntax that maps one-to-one to a single 8080 opcode.

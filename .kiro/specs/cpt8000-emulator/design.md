@@ -122,6 +122,14 @@ pub struct MachineConfig {
 
 ## Link-editor and system image (`mol80link`)
 
+> **Status: blocked, do not build yet.** A linker is defined by the MOL80 object-module format
+> — module-local vs. public symbols, relocation records, and the intra-segment-call vs.
+> long-call distinction — none of which are known yet (see the assembler requirements, "MOL80
+> modules, relocation, and the object format", and checklist item 9b). Building it now would
+> mean inventing an object format and relocation model that would likely be discarded. The only
+> source-independent groundwork is making `mol80asm` emit **relocation records**; the rest waits
+> for the manual/source. The design below is the intended shape once those facts are in hand.
+
 Because we have the full system source but no media, a host-side link step builds what a
 Program Disk + boot loader would otherwise have produced. This is a new tool alongside the
 emulator (and `mol80asm`), conceptually `mol80link`.
