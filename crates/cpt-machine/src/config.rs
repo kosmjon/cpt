@@ -50,6 +50,9 @@ pub struct MachineConfig {
 
     /// RST vector the vertical-retrace interrupt uses. [VERIFY]
     pub retrace_vector: u8,
+
+    /// Base I/O port of the disk controller (it claims 5 consecutive ports). [VERIFY]
+    pub disk_base_port: u8,
 }
 
 impl Default for MachineConfig {
@@ -65,6 +68,7 @@ impl Default for MachineConfig {
             // ~2 MHz 8080 / 60 Hz ≈ 33,333 cycles per frame (placeholder). [VERIFY]
             retrace_period_cycles: 33_333,
             retrace_vector: 1, // [VERIFY] RST 1 placeholder
+            disk_base_port: 0x50, // [VERIFY] placeholder: 5 ports 0x50..=0x54
         }
     }
 }

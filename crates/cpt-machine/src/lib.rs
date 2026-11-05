@@ -8,12 +8,16 @@
 pub mod config;
 pub mod demo;
 pub mod device;
+pub mod disk;
+pub mod disk_controller;
 pub mod display;
 pub mod exec;
 pub mod memory;
 
 pub use config::{BankSelectEncoding, MachineConfig};
 pub use device::Device;
+pub use disk::{DiskImage, Drive, Geometry, Station};
+pub use disk_controller::DiskController;
 pub use display::{DisplayDevice, Layout, PageSnapshot, COLS, ROWS};
 pub use exec::Executive;
 pub use memory::{BankedMemory, BANK1_BASE, BANK_SIZE};

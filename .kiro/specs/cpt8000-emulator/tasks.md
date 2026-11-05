@@ -57,12 +57,12 @@
   - Queue key events from the UI; present to CPU via ports/IRQ ([VERIFY] scan codes/matrix).
   - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 8. Implement the file-backed data disk
-  - [ ] 8.1 Data-disk device over a backing host file (read-block/write-block/flush).
+- [~] 8. Implement the file-backed data disk
+  - [x] 8.1 `DiskImage` backing store (block read/write/flush) over a host file or in-memory; `Drive` + two stations **A and B**, runtime mount/eject (program disk removable; A<->B copy supported).
     - _Requirements: 6.1, 6.3, 6.5_
-  - [ ] 8.2 Expose it at the I/O ports/commands the B-tree filer source uses ([VERIFY] interface/layout).
+  - [x] 8.2 `DiskController` `Device` exposes A/B via 5 I/O ports with a **placeholder** command protocol (station/block/command/data), isolated for easy replacement; driven end-to-end by the CPU. Real port map/protocol [VERIFY] from the filer source.
     - _Requirements: 6.2, 6.4_
-  - [ ] 8.3 Exercise the B-tree filer (Segment 12) against the data disk once the system builds.
+  - [ ] 8.3 Exercise the B-tree filer (Segment 12) against the data disk once the system builds, and replace the placeholder protocol with the real one.
     - _Requirements: 6.4_
 
 - [ ] 9. Link-editor and system image (`cpt-link`)
