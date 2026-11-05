@@ -115,15 +115,20 @@ function setupDrives(w) {
   }
 
   function eject(s) {
+    // Only offer a download if the disk was actually written while mounted — so ejecting an
+    // unmodified disk doesn't force an unwanted save dialog.
+    const wasModified = w.cpt_disk_modified(s) === 1;
     const len = w.cpt_disk_eject(s);
     if (len === 0) return; // refused (active) or nothing mounted
-    const bytes = new Uint8Array(w.memory.buffer, w.cpt_xfer_ptr(), len).slice();
-    const blob = new Blob([bytes], { type: "application/octet-stream" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = names[s] || `drive${s + 1}.img`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    if (wasModified) {
+      const bytes = new Uint8Array(w.memory.buffer, w.cpt_xfer_ptr(), len).slice();
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = names[s] || `drive${s + 1}.img`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
     names[s] = null;
     refresh(s);
   }

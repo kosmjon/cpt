@@ -210,12 +210,8 @@ pub extern "C" fn cpt_disk_mount(station: u32) -> u32 {
         let geom = st.geom;
         let bytes = XFER.with(|x| x.borrow().clone());
         let mut img = DiskImage::blank(geom);
-        // Copy as many whole blocks as the data provides.
-        let bs = geom.block_size;
-        let blocks = (bytes.len() / bs).min(geom.block_count);
-        for b in 0..blocks {
-            img.write_block(b, &bytes[b * bs..(b + 1) * bs]);
-        }
+        // Load the mounted bytes WITHOUT marking the image modified (mounting isn't a write).
+        img.load_bytes(&bytes);
         if let Some(ctrl) = st.disk() {
             ctrl.mount(station_of(station), img);
             1
@@ -293,6 +289,22 @@ pub extern "C" fn cpt_key_up(code: u32) {
             }
         }
     });
+}
+
+/// 1 if `station`'s mounted image has been modified (written) since it was mounted, else 0.
+/// The UI uses this to decide whether ejecting should offer the image for download.
+#[no_mangle]
+pub extern "C" fn cpt_disk_modified(station: u32) -> u32 {
+    STATE.with(|s| {
+        s.borrow_mut()
+            .as_mut()
+            .and_then(|st| {
+                let target = station_of(station);
+                st.disk()
+                    .map(|c| c.is_modified(target) as u32)
+            })
+            .unwrap_or(0)
+    })
 }
 
 /// 1 if `station`'s activity LED is lit (recent read/write), else 0.

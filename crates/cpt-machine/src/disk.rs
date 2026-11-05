@@ -61,7 +61,12 @@ pub struct DiskImage {
     data: Vec<u8>,
     /// If present, writes are flushed through to this file.
     backing: Option<std::fs::File>,
+    /// Set by a write, cleared by flush — drives the file write-through.
     dirty: bool,
+    /// Set by any write and NOT cleared by flush — records that the image was modified at all
+    /// since it was created/mounted. Hosts without a backing file (e.g. the browser) use this
+    /// to decide whether ejecting should offer the modified image for download.
+    modified: bool,
 }
 
 impl DiskImage {
@@ -72,6 +77,7 @@ impl DiskImage {
             geom,
             backing: None,
             dirty: false,
+            modified: false,
         }
     }
 
@@ -91,6 +97,7 @@ impl DiskImage {
             data,
             backing: Some(file),
             dirty: false,
+            modified: false,
         })
     }
 
@@ -119,7 +126,26 @@ impl DiskImage {
         let start = block * bs;
         self.data[start..start + bs].copy_from_slice(src);
         self.dirty = true;
+        self.modified = true;
         true
+    }
+
+    /// True if the image has been written since it was created/mounted (survives `flush`).
+    pub fn is_modified(&self) -> bool {
+        self.modified
+    }
+
+    /// Load raw image bytes (padded/truncated to the geometry) WITHOUT marking the image
+    /// modified — used when mounting a disk from host bytes, so a freshly-mounted, unwritten
+    /// disk is not considered dirty.
+    pub fn load_bytes(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(self.data.len());
+        self.data[..n].copy_from_slice(&bytes[..n]);
+        for b in &mut self.data[n..] {
+            *b = 0;
+        }
+        self.dirty = false;
+        self.modified = false;
     }
 
     /// Flush any pending writes to the backing file (no-op for in-memory images).

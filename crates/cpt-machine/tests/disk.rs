@@ -140,6 +140,27 @@ fn activity_led_lights_on_access_and_decays() {
 }
 
 #[test]
+fn modified_flag_tracks_writes() {
+    use cpt_machine::disk::Station;
+    let base = 0x50;
+    let mut ctrl = DiskController::new(base, geom());
+    ctrl.mount(Station::A, DiskImage::blank(geom()));
+    assert!(!ctrl.is_modified(Station::A), "freshly mounted: not modified");
+
+    // A read does not modify.
+    ctrl.io_out(base, 0);
+    ctrl.io_out(base + 3, 1); // CMD_READ
+    for _ in 0..128 {
+        ctrl.io_in(base + 4);
+    }
+    assert!(!ctrl.is_modified(Station::A), "reading must not mark modified");
+
+    // A completed write does.
+    ctrl_write_read(&mut ctrl, base, Station::A, 0, 0x5A);
+    assert!(ctrl.is_modified(Station::A), "writing a block marks modified");
+}
+
+#[test]
 fn runtime_mount_and_eject() {
     let base = 0x50;
     let mut ctrl = DiskController::new(base, geom());

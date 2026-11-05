@@ -115,6 +115,16 @@ impl DiskController {
         }
     }
 
+    /// True if the mounted image in `station` has been written since mount (for the UI's
+    /// "offer download on eject" decision).
+    pub fn is_modified(&self, station: Station) -> bool {
+        let drive = match station {
+            Station::A => &self.drive_a,
+            Station::B => &self.drive_b,
+        };
+        drive.image().map(|img| img.is_modified()).unwrap_or(false)
+    }
+
     fn drive(&mut self, station: Station) -> &mut Drive {
         match station {
             Station::A => &mut self.drive_a,
