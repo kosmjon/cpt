@@ -6,6 +6,9 @@ target/
 # Assembler output
 *.bin
 
+# wasm build artifact copied into the web dir (rebuilt from source)
+crates/cpt-wasm/web/*.wasm
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

@@ -17,8 +17,6 @@ use cpt_machine::{Executive, Machine, MachineConfig};
 use i8080_cpu::{Bus, Cpu};
 use std::process::ExitCode;
 
-mod demo;
-
 struct Options {
     file: String,
     trace: bool,
@@ -92,7 +90,7 @@ fn main() -> ExitCode {
 
     // The demo supplies its own built-in program; otherwise read the file.
     let (program, load_addr) = if opts.demo {
-        (demo::display_demo(), 0x0100u16)
+        (cpt_machine::demo::display_demo(), 0x0100u16)
     } else {
         match std::fs::read(&opts.file) {
             Ok(p) => (p, opts.load_addr),

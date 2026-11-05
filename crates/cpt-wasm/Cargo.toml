@@ -1,0 +1,15 @@
+[package]
+name = "cpt-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly boundary exposing the CPT machine to a browser (no wasm-bindgen; plain C ABI)"
+
+[lib]
+name = "cpt_wasm"
+# cdylib produces a .wasm module with the exported functions; rlib lets native tests link it.
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+i8080-cpu = { path = "../i8080-cpu" }
+cpt-machine = { path = "../cpt-machine" }

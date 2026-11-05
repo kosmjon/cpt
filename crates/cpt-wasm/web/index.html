@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CPT Display (wasm)</title>
+    <style>
+      body {
+        background: #2a2d31;
+        color: #cdd3d8;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 2rem;
+      }
+
+      /* The CRT case: a chunky beige-grey housing enclosing the page-white screen. */
+      .case {
+        background: linear-gradient(160deg, #6b6256, #4e4842);
+        border-radius: 22px;
+        padding: 40px 48px 56px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.2);
+        position: relative;
+      }
+      .bezel {
+        background: #14181b;
+        border-radius: 10px;
+        padding: 18px;
+        box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.8);
+      }
+      /* The page-white screen; the canvas paints into it. A slight inner glow + rounding reads
+         as a CRT face. */
+      #screen {
+        display: block;
+        border-radius: 6px;
+        background: #e8f0f0;
+        box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.25);
+        image-rendering: pixelated;
+      }
+      .nameplate {
+        position: absolute;
+        bottom: 20px;
+        right: 48px;
+        font: 600 14px system-ui, sans-serif;
+        letter-spacing: 2px;
+        color: #d8cfbb;
+        opacity: 0.8;
+      }
+      #status {
+        font-family: "Courier New", monospace;
+        opacity: 0.7;
+      }
+      h1 {
+        font-size: 1rem;
+        font-weight: 600;
+        opacity: 0.8;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>CPT 8000 / 9000 — page-white display (WebAssembly)</h1>
+    <div class="case">
+      <div class="bezel">
+        <canvas id="screen"></canvas>
+      </div>
+      <div class="nameplate">CPT</div>
+    </div>
+    <div id="status">loading…</div>
+    <script src="cpt.js"></script>
+  </body>
+</html>

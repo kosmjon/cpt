@@ -51,9 +51,10 @@ system image, and run on the emulated machine. Built as a cargo workspace of foc
 | `crates/i8080-cpu` | done | Pure 8080 CPU core; passes the CP/M diagnostics incl. the exhaustive 8080EXM exerciser |
 | `crates/cpt-machine` | in progress | Banked memory (bank 0 + switchable 32K blocks), bank-select port, `Device` trait, executive loop with interrupts, memory-mapped display device with the vertical-retrace interrupt |
 | `crates/cpt-run` | done | CLI trace runner: load a binary, run it on the machine, print a disassembled trace |
+| `crates/cpt-wasm` | proof | WebAssembly boundary + canvas web page: runs the machine in a browser and paints the page-white display in a CRT case (see its README) |
 
 Still to come: keyboard device, file-backed data disk, the link-editor (`cpt-link`) that
-bin-packs segments into a system image, the wasm boundary, and the React UI.
+bin-packs segments into a system image, and the full React UI.
 
 ```
 # Run a binary on the emulated machine with a disassembled trace:

@@ -6,4 +6,5 @@ members = [
     "crates/i8080-cpu",
     "crates/cpt-machine",
     "crates/cpt-run",
+    "crates/cpt-wasm",
 ]

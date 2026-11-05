@@ -6,6 +6,7 @@
 //! and delivering interrupts.
 
 pub mod config;
+pub mod demo;
 pub mod device;
 pub mod display;
 pub mod exec;

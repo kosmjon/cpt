@@ -3,17 +3,11 @@
 use cpt_machine::{DisplayDevice, Executive, Machine, MachineConfig};
 use i8080_cpu::{Bus, Cpu};
 
-// Re-declare the demo builder path by including the module. The binary crate's `demo` module
-// isn't importable from an integration test, so we reproduce the run here using the same
-// config and the demo bytes via a small copy of the entry points we need.
-#[path = "../src/demo.rs"]
-mod demo;
-
 fn run_demo(steps: u64) -> Executive {
     let cfg = MachineConfig::default();
     let mut machine = Machine::new(cfg.clone());
     machine.attach_display(DisplayDevice::new(cfg.retrace_period_cycles, cfg.retrace_vector));
-    machine.mem.load_bank0(0x0100, &demo::display_demo());
+    machine.mem.load_bank0(0x0100, &cpt_machine::demo::display_demo());
     let mut cpu = Cpu::new();
     cpu.pc = 0x0100;
     cpu.sp = 0x7F00;
