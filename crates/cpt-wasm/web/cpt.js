@@ -121,7 +121,7 @@ function setupDrives(w) {
     const blob = new Blob([bytes], { type: "application/octet-stream" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = names[s] || `drive${s === 0 ? "A" : "B"}.img`;
+    a.download = names[s] || `drive${s + 1}.img`;
     a.click();
     URL.revokeObjectURL(a.href);
     names[s] = null;
@@ -168,11 +168,13 @@ function setupDrives(w) {
 // The CPT special keys, 5 columns x 5 rows (from special-keys.md). Each entry is the keycap
 // label (lines split on "\n"); `lock: true` marks a locking key; null is the blank position.
 // Listed column-major here, matching the spec's columns.
+// `mod: true` marks a latching modifier (held down to form chords like CODE+IN); `lock: true`
+// marks a lock-on/lock-off key (e.g. CLEAR TAB SET).
 const SPECIAL_KEY_COLUMNS = [
   // Column 1
-  [{ t: "CODE" }, { t: "CLEAR\nTAB\nSET", lock: true }, { t: "HOLD" }, { t: "MAR\nSET" }, { t: "MAR\nREL" }],
+  [{ t: "CODE", mod: true }, { t: "CLEAR\nTAB\nSET", lock: true }, { t: "HOLD" }, { t: "MAR\nSET" }, { t: "MAR\nREL" }],
   // Column 2
-  [{ t: "CODE" }, { t: "INSERT" }, { t: "PROG" }, { t: "MOVE" }, { t: "ERASE" }],
+  [{ t: "CODE", mod: true }, { t: "INSERT" }, { t: "PROG" }, { t: "MOVE" }, { t: "ERASE" }],
   // Column 3
   [{ t: "STOP" }, { t: "SKIP" }, { t: "ADJ" }, { t: "UP" }, { t: "DOWN" }],
   // Column 4
@@ -184,6 +186,23 @@ const SPECIAL_KEY_COLUMNS = [
 // Build the special-key panel. Keys render in row-major order (CSS grid), press with a tactile
 // animation, and locking keys toggle a locked-on state. Clicks are not yet wired to the machine
 // (no keyboard device / known key codes yet) — they log for now.
+// Shared latched-modifier state, so both the on-screen panel and the host PC keyboard honor
+// chords (e.g. latch CODE on screen, then type a letter -> CODE+letter). Each entry is
+// { code, el } for a currently-held modifier.
+const latchedMods = [];
+
+// Release all latched modifiers (send their break events) and clear the held state + visuals.
+// Called after a non-modifier key is struck, completing any chord (the modifier's make was
+// already sent when it latched, so the downstream software sees modifier-down ... key ...
+// modifier-up, exactly like a real two-finger chord).
+function releaseLatchedMods(w) {
+  for (const m of latchedMods) {
+    w.cpt_key_up(m.code);
+    if (m.el) m.el.classList.remove("held");
+  }
+  latchedMods.length = 0;
+}
+
 function setupSpecialKeys(w) {
   const grid = document.getElementById("specialKeys");
   if (!grid) return;
@@ -206,20 +225,39 @@ function setupSpecialKeys(w) {
       const code = 0xe0 + row * 5 + col;
       key.dataset.code = code;
 
-      if (spec.lock) {
-        // Locking key: click toggles the locked-on state and sends a press each time.
+      if (spec.mod) {
+        // Latching modifier (CODE): click latches it down (make, no break yet); click again
+        // unlatches (break). It stays held until a non-modifier key is struck or it is clicked
+        // again — reconstructing a two-finger chord with one mouse.
+        key.addEventListener("click", () => {
+          const idx = latchedMods.findIndex((m) => m.el === key);
+          if (idx >= 0) {
+            // Already latched -> unlatch.
+            w.cpt_key_up(code);
+            key.classList.remove("held");
+            latchedMods.splice(idx, 1);
+          } else {
+            w.cpt_key_down(code);
+            key.classList.add("held");
+            latchedMods.push({ code, el: key });
+          }
+        });
+      } else if (spec.lock) {
+        // Lock-on/lock-off key (e.g. CLEAR TAB SET): toggles a locked state, press pair each time.
         key.addEventListener("click", () => {
           key.classList.toggle("locked");
           w.cpt_key_down(code);
           w.cpt_key_up(code);
+          releaseLatchedMods(w);
         });
       } else {
-        // Momentary key: brief pressed animation + a press/release pair.
+        // Momentary key: make + (release latched mods) + its own break — forming any chord.
         key.addEventListener("click", () => {
           key.classList.add("pressed");
           setTimeout(() => key.classList.remove("pressed"), 90);
           w.cpt_key_down(code);
           w.cpt_key_up(code);
+          releaseLatchedMods(w);
         });
       }
       grid.appendChild(key);
@@ -262,6 +300,8 @@ function setupHostKeyboard(w) {
     if (code === null) return;
     e.preventDefault();
     w.cpt_key_up(code);
+    // A real key completes any pending on-screen chord (e.g. latched CODE + typed letter).
+    releaseLatchedMods(w);
   });
 }
 

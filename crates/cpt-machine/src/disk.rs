@@ -11,19 +11,23 @@
 //!     command protocol, isolated so the real protocol (from the B-tree filer source) is a
 //!     localized change. [VERIFY]
 //!
-//! Stations A and B are **symmetric data stations**: both support read/write/flush and can be
-//! mounted/ejected at runtime (the operator could pull the program disk after boot and copy /
-//! re-paginate files between A and B in either direction). The system itself is loaded from a
-//! linked image, not booted from a disk, so neither station is special to the hardware.
+//! The two stations (shown to the user as **drive 1 and drive 2**) are **symmetric data
+//! stations**: both support read/write/flush and can be mounted/ejected at runtime (the
+//! operator could pull the program disk after boot and copy / re-paginate files between the two
+//! in either direction). The system itself is loaded from a linked image, not booted from a
+//! disk, so neither station is special to the hardware.
 //!
 //! Geometry (block size, block count) is configurable; defaults are placeholders. [VERIFY]
 
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-/// Which drive station.
+/// Which drive station. The two stations are presented to the **user as drive 1 and drive 2**;
+/// `A`/`B` are just internal identifiers (A = drive 1, B = drive 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Station {
+    /// Drive 1 (shown to the user as "1").
     A,
+    /// Drive 2 (shown to the user as "2").
     B,
 }
 

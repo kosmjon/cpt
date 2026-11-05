@@ -183,7 +183,7 @@ pub fn display_demo() -> Vec<u8> {
     a.mvi_m(b'>');
 
     // 5. Status line.
-    write_string(&mut a, row_addr(STATUS_ROW), "STATUS: running - mount a disk in drive A");
+    write_string(&mut a, row_addr(STATUS_ROW), "STATUS: running - mount a disk in drive 1");
 
     // 6. Initialize the current-block counter to 0.
     a.mvi_a(0);
