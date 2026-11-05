@@ -13,17 +13,29 @@
 //!
 //! Options may be combined; the file is the last argument.
 
-use cpt_machine::{Executive, Machine, MachineConfig};
+mod serial_demo;
+mod tcp_serial;
+
+use cpt_machine::{Executive, Machine, MachineConfig, SerialDevice, Transport};
 use i8080_cpu::{Bus, Cpu};
 use std::process::ExitCode;
+
+/// How to back the serial port, if requested.
+enum SerialMode {
+    None,
+    Listen(String),
+    Connect(String),
+}
 
 struct Options {
     file: String,
     trace: bool,
     display: bool,
     demo: bool,
+    serial_demo: bool,
     load_addr: u16,
     max_steps: u64,
+    serial: SerialMode,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -33,8 +45,10 @@ fn parse_args() -> Result<Options, String> {
         trace: false,
         display: false,
         demo: false,
+        serial_demo: false,
         load_addr: 0x0000,
         max_steps: 1_000_000,
+        serial: SerialMode::None,
     };
     let mut i = 0;
     while i < args.len() {
@@ -44,6 +58,27 @@ fn parse_args() -> Result<Options, String> {
             "--demo" => {
                 opts.demo = true;
                 opts.display = true;
+            }
+            "--serial-listen" => {
+                i += 1;
+                opts.serial = SerialMode::Listen(
+                    args.get(i).ok_or("--serial-listen needs an address")?.clone(),
+                );
+            }
+            "--serial-connect" => {
+                i += 1;
+                opts.serial = SerialMode::Connect(
+                    args.get(i).ok_or("--serial-connect needs an address")?.clone(),
+                );
+            }
+            "--serial-demo" => {
+                // Built-in serial sign-on + echo program; defaults to listening on :2323 if no
+                // serial mode was otherwise given.
+                opts.serial_demo = true;
+                opts.max_steps = u64::MAX; // run until the connection closes / interrupted
+                if matches!(opts.serial, SerialMode::None) {
+                    opts.serial = SerialMode::Listen("127.0.0.1:2323".to_string());
+                }
             }
             "--load" => {
                 i += 1;
@@ -62,7 +97,7 @@ fn parse_args() -> Result<Options, String> {
         }
         i += 1;
     }
-    if opts.file.is_empty() && !opts.demo {
+    if opts.file.is_empty() && !opts.demo && !opts.serial_demo {
         return Err("no input file given".into());
     }
     Ok(opts)
@@ -83,13 +118,18 @@ fn main() -> ExitCode {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error: {}", e);
-            eprintln!("usage: cpt-run [--trace] [--load <addr>] [--steps <n>] <file.bin>");
+            eprintln!(
+                "usage: cpt-run [--trace] [--load <addr>] [--steps <n>] \
+                 [--serial-listen <addr>|--serial-connect <addr>] <file.bin>"
+            );
             return ExitCode::from(2);
         }
     };
 
-    // The demo supplies its own built-in program; otherwise read the file.
-    let (program, load_addr) = if opts.demo {
+    // The demos supply their own built-in program; otherwise read the file.
+    let (program, load_addr) = if opts.serial_demo {
+        (serial_demo::serial_demo(), 0x0000u16)
+    } else if opts.demo {
         (cpt_machine::demo::display_demo(), 0x0100u16)
     } else {
         match std::fs::read(&opts.file) {
@@ -111,6 +151,35 @@ fn main() -> ExitCode {
             cfg.retrace_vector,
         ));
     }
+
+    // Serial port: attach the device and open a TCP transport if requested.
+    let mut serial: Option<(usize, Box<dyn Transport>)> = None;
+    let transport: Option<Box<dyn Transport>> = match &opts.serial {
+        SerialMode::None => None,
+        SerialMode::Listen(addr) => match tcp_serial::TcpTransport::listen(addr) {
+            Ok(t) => Some(Box::new(t)),
+            Err(e) => {
+                eprintln!("error: serial listen on {} failed: {}", addr, e);
+                return ExitCode::FAILURE;
+            }
+        },
+        SerialMode::Connect(addr) => match tcp_serial::TcpTransport::connect(addr) {
+            Ok(t) => Some(Box::new(t)),
+            Err(e) => {
+                eprintln!("error: serial connect to {} failed: {}", addr, e);
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    if let Some(t) = transport {
+        let dev = machine.device_count();
+        machine.attach_device(Box::new(SerialDevice::new(
+            cfg.serial_base_port,
+            Some(cfg.serial_vector),
+        )));
+        serial = Some((dev, t));
+    }
+
     if (opts.load_addr as usize + program.len()) > 0x8000 {
         eprintln!(
             "error: program of {} bytes at {:#06X} does not fit in bank 0 (0x0000-0x7FFF)",
@@ -143,6 +212,20 @@ fn main() -> ExitCode {
         }
         exec.step();
         steps += 1;
+
+        // Pump the serial transport periodically (not every instruction — once per ~1000 steps
+        // keeps overhead low while staying responsive).
+        if let Some((dev, transport)) = serial.as_mut() {
+            if steps % 1000 == 0 {
+                if let Some(s) = exec
+                    .machine
+                    .device_mut(*dev)
+                    .and_then(|d| d.as_any_mut().downcast_mut::<SerialDevice>())
+                {
+                    cpt_machine::serial_pump(s, transport.as_mut());
+                }
+            }
+        }
     }
 
     // Render the display frame if one was attached.

@@ -14,6 +14,7 @@ pub mod display;
 pub mod exec;
 pub mod keyboard;
 pub mod memory;
+pub mod serial;
 
 pub use config::{BankSelectEncoding, MachineConfig};
 pub use device::Device;
@@ -21,6 +22,7 @@ pub use disk::{DiskImage, Drive, Geometry, Station};
 pub use disk_controller::DiskController;
 pub use display::{DisplayDevice, Layout, PageSnapshot, COLS, ROWS};
 pub use keyboard::KeyboardDevice;
+pub use serial::{pump as serial_pump, LoopbackTransport, SerialDevice, Transport};
 pub use exec::Executive;
 pub use memory::{BankedMemory, BANK1_BASE, BANK_SIZE};
 

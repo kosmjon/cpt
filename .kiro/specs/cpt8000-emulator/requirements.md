@@ -165,6 +165,11 @@ This is the **second** of two coordinated specs; the first is the MOL80 assemble
      The `IN` key plausibly corresponds to the `IN` indicator seen in the CPT 9000 status band.
      **[CONFIRMED labels; groupings partly inferred — VERIFY]**
   4. **Numeric keypad:** `0`–`9`, `-`, `.`/`,`, and a tall `ENTER`.
+- The hardware included a **bidirectional RS-232 serial port** (a USART-style chip the CPU
+  drives via a data register and a status/control register). CPT implemented higher-level
+  protocols (e.g. bisync) in **software** on top of it, so the emulator models only the
+  byte-level USART primitive; the protocol is CPT code that runs on the CPU. **[CONFIRMED]**
+  (chip type, port addresses, status-bit layout, and interrupt vector are **[VERIFY]**)
 - UI should be built with **React** if practical. **[CONFIRMED]**
 
 ## Open items to resolve [VERIFY]

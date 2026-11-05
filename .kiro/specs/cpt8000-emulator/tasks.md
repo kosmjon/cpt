@@ -92,6 +92,18 @@
   - [ ] 9.7 Tests: packing fits/overflows, bank-0 placement, byte-exact tables once format known.
     - _Requirements: 7.2, 7.3, 7.4_
 
+- [x] 8b. Bidirectional serial port (USART) — `SerialDevice` with DATA + STATUS ports, RX/TX
+      queues, optional RX interrupt; a `Transport` trait with `LoopbackTransport` (wasm-safe) and
+      a native `TcpTransport` (listen/connect, threaded, non-blocking) wired into `cpt-run` via
+      `--serial-listen`/`--serial-connect`. Verified: loopback round-trip, CPU-receives-via-IRQ,
+      and a real TCP socket round-trip. Ports/status-bits/vector are config [VERIFY].
+  - Note: the **UI never sees the serial port**. It is a CPU-facing byte primitive; any serial
+    data that appears on screen or on disk is CPT software interpreting those bytes (terminal
+    emulation / comm segments). So there is no "browser serial" feature. A WebSocket transport
+    (to let a browser-hosted emulator reach an external peer) is a *maybe-if-needed*, not a
+    planned gap — native `cpt-run` with TCP covers the real use.
+  - _Requirements: (serial port)_
+
 - [ ] 9b. System-image loader in `cpt-machine`
   - Load an image into bank 0 + all 32K blocks; set PC to the main entry point.
   - _Requirements: 7.6_

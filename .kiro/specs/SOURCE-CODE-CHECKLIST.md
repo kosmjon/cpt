@@ -111,6 +111,11 @@ Status tags used in the specs:
 - [ ] K2. `CODE`-key shifted meanings (what `CODE`+key combinations produce).
 - [ ] K3. Exact glyphs on the special symbol/format keys at the typewriter block's top-left.
 
+### Serial port (USART)
+- [ ] R1. Serial port addresses, USART chip type, status/control bit layout, and the RX
+      interrupt vector. (The device + TCP transport are built; only these specifics are
+      [VERIFY]. Bisync etc. are CPT software, not emulated.)
+
 ### Data disk (simple, file-backed — no 8-inch floppy hardware emulation)
 - [ ] F1. The I/O ports/commands the B-tree filer (Segment 12) source uses.
 - [ ] F2. The filer's sector/block model (determines the backing host-file layout).

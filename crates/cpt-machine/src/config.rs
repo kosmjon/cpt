@@ -60,6 +60,12 @@ pub struct MachineConfig {
     /// RST vector the keyboard raises on a key event (the real keyboard was interrupt-driven).
     /// [VERIFY]
     pub keyboard_vector: u8,
+
+    /// Base I/O port of the serial port / USART (DATA at +0, STATUS/CONTROL at +1). [VERIFY]
+    pub serial_base_port: u8,
+
+    /// RST vector the serial port raises when a byte is received, if interrupt-driven. [VERIFY]
+    pub serial_vector: u8,
 }
 
 impl Default for MachineConfig {
@@ -78,6 +84,8 @@ impl Default for MachineConfig {
             disk_base_port: 0x50, // [VERIFY] placeholder: 5 ports 0x50..=0x54
             keyboard_base_port: 0x60, // [VERIFY] placeholder: STATUS 0x60, DATA 0x61
             keyboard_vector: 2, // [VERIFY] RST 2 placeholder
+            serial_base_port: 0x70, // [VERIFY] placeholder: DATA 0x70, STATUS 0x71
+            serial_vector: 3, // [VERIFY] RST 3 placeholder
         }
     }
 }
