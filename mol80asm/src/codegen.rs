@@ -215,6 +215,17 @@ fn lower_item(
     match item {
         Item::Empty => {}
 
+        // `SYMBOL:rp` — load a 16-bit immediate (a label address) into a register pair via LXI.
+        // Lower to an AddrRef so codegen resolves the symbol (and records a relocation), rather
+        // than the encoder's placeholder-0 path.
+        Item::Move { src: Operand::Symbol(name), dst: Operand::Reg(rp) } if lxi_opcode(*rp).is_some() => {
+            emits.push(Emit::AddrRef {
+                opcode: lxi_opcode(*rp).unwrap(),
+                label: name.clone(),
+                span,
+            });
+        }
+
         Item::Move { src, dst } => match encode_move(src, dst) {
             Ok(b) => emits.push(Emit::Bytes(b)),
             Err(e) => diags.push(Diagnostic::error(format!("{:?}", e), span)),
@@ -295,6 +306,17 @@ fn lower_item(
         }
 
         Item::DefineSpace { count } => emits.push(Emit::Space(*count)),
+    }
+}
+
+/// The LXI opcode for a register pair (B=0x01, D=0x11, H=0x21, SP=0x31), or None for non-pairs.
+fn lxi_opcode(rp: Reg) -> Option<u8> {
+    match rp {
+        Reg::BC => Some(0x01),
+        Reg::DE => Some(0x11),
+        Reg::HL => Some(0x21),
+        Reg::SP => Some(0x31),
+        _ => None,
     }
 }
 

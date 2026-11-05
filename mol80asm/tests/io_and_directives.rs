@@ -82,6 +82,37 @@ fn org_forward_fill() {
     assert_eq!(a.bytes, vec![0x47, 0x00, 0x00, 0x00, 0x00, 0x4F]);
 }
 
+// --- immediate ALU and symbolic LXI (found while writing the MOL80 console) ---
+
+#[test]
+fn immediate_alu_forms() {
+    // A <op> n : A -> ADI/SUI/ANI/ORI/XRI. (A+1:A / A-1:A stay INR/DCR.)
+    assert_eq!(asm("          A+5:A\n").bytes, vec![0xC6, 5]); // ADI
+    assert_eq!(asm("          A-5:A\n").bytes, vec![0xD6, 5]); // SUI
+    assert_eq!(asm("          A+*2:A\n").bytes, vec![0xE6, 2]); // ANI
+    assert_eq!(asm("          A-*2:A\n").bytes, vec![0xF6, 2]); // ORI
+    assert_eq!(asm("          A**2:A\n").bytes, vec![0xEE, 2]); // XRI
+    assert_eq!(asm("          A+1:A\n").bytes, vec![0x3C]); // INR A, not ADI
+    assert_eq!(asm("          A-1:A\n").bytes, vec![0x3D]); // DCR A, not SUI
+}
+
+#[test]
+fn symbol_into_pair_resolves_to_address() {
+    // MSG:HL must load the ADDRESS of MSG (LXI H,addr), not a placeholder 0, and it is an
+    // origin-relative address so it gets a relocation record.
+    let a = asm("          ORG 16\n          MSG:HL\nMSG       DB 1\n");
+    // LXI H = 0x21, then MSG's address = 0x0013 (16 + 3-byte LXI), little-endian.
+    assert_eq!(&a.bytes[0..3], &[0x21, 0x13, 0x00]);
+    assert_eq!(a.relocations.len(), 1);
+    assert_eq!(a.relocations[0].symbol, "MSG");
+}
+
+#[test]
+fn full_line_star_comments_are_ignored() {
+    let a = asm("* a comment with / : ( ) operators\n          A:B\n* another\n");
+    assert_eq!(a.bytes, vec![0x47]);
+}
+
 #[test]
 fn org_backward_is_error() {
     let msg = asm_err("          ORG 10\n          A:B\n          ORG 2\n          A:C\n");

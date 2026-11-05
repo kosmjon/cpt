@@ -22,9 +22,14 @@ use crate::token::{FlagKind, Reg, Span, Token, TokenKind};
 /// marks a label. [CONFIRMED: labels live in the first ~10 chars, no trailing colon.]
 pub const LABEL_WIDTH: usize = 10;
 
-/// Column (1-based) at which the inline comment field begins. Everything from here to end of
-/// line is a comment with no delimiter. [VERIFY — user recalls ~column 40.]
-pub const COMMENT_COL: usize = 40;
+/// Column (1-based) at which a column-based inline comment field begins — everything from here
+/// to end of line would be treated as a comment with no delimiter.
+///
+/// The real MOL80 inline-comment column is [VERIFY] (user recalls ~40). Hard-truncating at a
+/// guessed column breaks legitimate long lines (e.g. a `DB` with a long string), so for now we
+/// set this past any reasonable line length (effectively disabled) and rely on full-line `*`
+/// comments for hand-written source. When the manual confirms the real column, set it here.
+pub const COMMENT_COL: usize = 1_000;
 
 pub struct Lexer<'a> {
     diags: &'a mut Diagnostics,
@@ -55,6 +60,15 @@ impl<'a> Lexer<'a> {
     fn tokenize_line(&mut self, line: &str, line_no: u32, out: &mut Vec<Token>) {
         // Work in chars so column numbers are character-based.
         let chars: Vec<char> = line.chars().collect();
+
+        // Full-line comment: if the first non-blank character is '*', ignore the whole line.
+        // (Our-convention placeholder for writing .mol files by hand; the confirmed MOL80
+        // comment model is column-based. [VERIFY] the real full-line/block comment form.)
+        if let Some(first) = chars.iter().find(|c| !c.is_whitespace()) {
+            if *first == '*' {
+                return;
+            }
+        }
 
         // --- Zone 1: label field (columns 1..=LABEL_WIDTH) ---
         if !chars.is_empty() && !chars[0].is_whitespace() {

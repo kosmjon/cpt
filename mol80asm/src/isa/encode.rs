@@ -101,6 +101,20 @@ pub fn encode_alu(
             .ok_or_else(|| EncodeError::Unsupported(format!("ALU {:?} A,{:?}", op, r)));
     }
 
+    // Immediate ALU targeting A: `A <op> n : A` -> ADI/SUI/ANI/ORI/XRI n.
+    // (The `A+1:A`/`A-1:A` INR/DCR cases are handled above and don't reach here.)
+    if let (Operand::Reg(Reg::A), Operand::Imm(n), Operand::Reg(Reg::A)) = (lhs, rhs, dst) {
+        let opcode = match op {
+            AluOp::Add => 0xC6, // ADI
+            AluOp::Sub => 0xD6, // SUI
+            AluOp::And => 0xE6, // ANI
+            AluOp::Or => 0xF6,  // ORI
+            AluOp::Xor => 0xEE, // XRI
+        };
+        let byte = fit_u8(*n)?;
+        return Ok(vec![opcode, byte]);
+    }
+
     Err(EncodeError::Unsupported(format!(
         "alu {:?} {:?},{:?} -> {:?}",
         op, lhs, rhs, dst

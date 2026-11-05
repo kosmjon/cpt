@@ -130,15 +130,22 @@ fn flag_conditional_block() {
     }
 }
 
-/// Column-based comments (>= COMMENT_COL) are discarded, including operator-like text.
+/// Full-line comments: a line whose first non-blank char is '*' is ignored entirely. It still
+/// occupies a (blank) line in the AST, like any blank line, but contributes no instruction and
+/// its operator-like characters are never parsed.
 #[test]
-fn comment_field_is_ignored() {
-    // Instruction `A:B` then, well past column 40, a comment containing `/` and `:`.
-    let line = format!("{:<39}{}\n", "          A:B", "a/comment: with ops");
-    let p = parse_ok(&line);
-    assert_eq!(p.lines.len(), 1);
+fn full_line_star_comment_is_ignored() {
+    let src = "* this is a comment with / and : operators\n          A:B\n";
+    let p = parse_ok(src); // no diagnostics: the comment text was not parsed as code
+    // Exactly one real instruction survives; the comment line is just an Empty line.
+    let real: Vec<_> = p
+        .lines
+        .iter()
+        .filter(|l| !matches!(l.item, Item::Empty))
+        .collect();
+    assert_eq!(real.len(), 1);
     assert_eq!(
-        p.lines[0].item,
+        real[0].item,
         Item::Move { src: Operand::Reg(Reg::A), dst: Operand::Reg(Reg::B) }
     );
 }

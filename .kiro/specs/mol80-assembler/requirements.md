@@ -114,6 +114,12 @@ which will execute the code this tool produces.
   its column position, e.g. column ~40). **[CONFIRMED]** (exact comment column **[VERIFY]**)
 - Source also supports a **block-comment** form (e.g. a header block at the top of a source
   file). Exact form **[VERIFY]**. **[CONFIRMED that it exists]**
+- **Full-line comments begin with `*`** — a line whose first non-blank character is `*` is a
+  comment. This matches real MOL80 per the user and is now a confirmed feature (and likely the
+  block/header-comment mechanism: a run of `*` lines). **[CONFIRMED]**
+- The earlier **inline comment column (~40) is NOT currently applied**: hard-truncating lines at
+  a guessed column broke legitimate long lines (e.g. `DB` with a long string). `COMMENT_COL` is
+  set effectively-off until the manual confirms the real inline-comment column. **[VERIFY]**
 - "Segment" (e.g. Segment 12 = B-tree disk filing system) was an **organizing construct
   of the CPT software library**, not a MOL80 language keyword. The assembler does not need
   a built-in segment/link model for v1. **[CONFIRMED]**

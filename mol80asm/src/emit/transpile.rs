@@ -207,6 +207,17 @@ fn alu_mnemonic(op: AluOp, lhs: &Operand, rhs: &Operand, dst: &Operand) -> Strin
             .map(str::to_string)
             .unwrap_or_else(|| format!("; <bad ALU {:?}>", op));
     }
+    // Immediate ALU: A <op> n : A -> ADI/SUI/ANI/ORI/XRI n.
+    if let (Operand::Reg(Reg::A), Operand::Imm(n), Operand::Reg(Reg::A)) = (lhs, rhs, dst) {
+        let mnem = match op {
+            AluOp::Add => "ADI",
+            AluOp::Sub => "SUI",
+            AluOp::And => "ANI",
+            AluOp::Or => "ORI",
+            AluOp::Xor => "XRI",
+        };
+        return format!("{} {:02X}H", mnem, (*n as u16) & 0xFF);
+    }
     format!("; <unsupported ALU {:?}>", op)
 }
 

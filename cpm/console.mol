@@ -1,0 +1,58 @@
+* ===========================================================================
+*  CP/M-over-serial, increment 2: serial CONSOLE routines in MOL80.
+*
+*  First real MOL80 source file (assembled by mol80asm, committed to the repo).
+*  Reproduces the serial sign-on + echo demo, written in MOL80, exercising the
+*  confirmed PORT(n) I/O and the ORG/DB/DS directives.
+*
+*  Serial port (MachineConfig defaults; [VERIFY] vs. real CPT hardware):
+*     DATA   = port 112 (70H)  -- received byte in / transmit byte out
+*     STATUS = port 113 (71H)  -- bit 0 = RX ready, bit 1 = TX ready
+*
+*  Full-line comments begin with '*' (our-convention placeholder). Code lines
+*  are kept free of inline comments to avoid column counting.
+* ===========================================================================
+          ORG 0
+*
+*  Entry: set up a stack, print the sign-on, then echo forever.
+START     STACK:HL
+          HL:SP
+          MSG:HL
+          CALL(PRINT)
+ECHO      CALL(CONIN)
+          CALL(CONOUT)
+          /ECHO
+*
+*  CONOUT: send the byte in A out the serial port (wait for TX ready).
+*  Stash A on the stack across the status poll (the poll clobbers A).
+CONOUT    PSW:STK
+COWAIT    PORT(113):A
+          A+*2:A
+          FZ=1? /COWAIT
+          STK:PSW
+          A:PORT(112)
+          RTN
+*
+*  CONIN: wait for a received byte, return it in A.
+CONIN     PORT(113):A
+          A+*1:A
+          FZ=1? /CONIN
+          PORT(112):A
+          RTN
+*
+*  PRINT: send the NUL-terminated string at HL.
+PRINT     (HL):A
+          A+*255:A
+          FZ=1? /PDONE
+          CALL(CONOUT)
+          HL+1:HL
+          /PRINT
+PDONE     RTN
+*
+*  Data: sign-on message, NUL-terminated.
+MSG       DB "CPT serial demo (MOL80) online.", 13, 10
+          DB "Type and it echoes:", 13, 10, 0
+*
+*  Stack: reserve space; SP starts at STACK (top, grows down).
+          DS 32
+STACK     DS 0

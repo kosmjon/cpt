@@ -23,7 +23,8 @@ Status tags used in the specs:
 - [ ] 5. Assembler directives: `ORG`, EQU, any others — we use a placeholder `ORG`; confirm the
       real spelling and whether EQU/others exist.
       (Note: I/O via `A:PORT(n)`/`PORT(n):A` is CONFIRMED from the scan, not a placeholder.)
-- [ ] 6. Inline-comment start column; the block-comment (file-header) form.
+- [ ] 6. Inline-comment start column (currently disabled; `*` full-line comments are CONFIRMED
+      and likely also the block/header-comment form — confirm whether there is anything more).
 - [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists.
 - [ ] 8. The full verified table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 (256 entries).
 - [ ] 9. Operand expression syntax (e.g. `LABEL+2` arithmetic on labels/constants).
