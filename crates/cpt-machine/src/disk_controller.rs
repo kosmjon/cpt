@@ -50,7 +50,15 @@ pub struct DiskController {
     cursor: usize,
     /// True while a write is in progress (DATA writes fill the buffer).
     writing: bool,
+    /// Per-station activity timer (in CPU cycles). Set when a station is read/written and
+    /// counted down by `tick`; while non-zero the drive's LED is considered lit. This keeps a
+    /// brief access visible on screen instead of flickering for a single instruction.
+    activity: [u32; 2],
 }
+
+/// How long the activity LED stays lit after a disk access, in CPU cycles. Chosen so a single
+/// access is visible for a fraction of a second at ~2 MHz. (Cosmetic; not hardware-accurate.)
+const ACTIVITY_HOLD_CYCLES: u32 = 100_000;
 
 impl DiskController {
     /// Create a controller claiming five consecutive ports starting at `base`.
@@ -67,7 +75,26 @@ impl DiskController {
             buffer: vec![0; geom.block_size],
             cursor: 0,
             writing: false,
+            activity: [0; 2],
         }
+    }
+
+    fn station_index(station: Station) -> usize {
+        match station {
+            Station::A => 0,
+            Station::B => 1,
+        }
+    }
+
+    /// Mark the selected station as active (lights its LED for a hold window).
+    fn mark_active(&mut self) {
+        let i = Self::station_index(self.station);
+        self.activity[i] = ACTIVITY_HOLD_CYCLES;
+    }
+
+    /// True if `station`'s activity LED should be lit (recent read/write).
+    pub fn is_active(&self, station: Station) -> bool {
+        self.activity[Self::station_index(station)] > 0
     }
 
     /// Mount an image in a station (runtime-swappable; ejects any current image first).
@@ -103,6 +130,10 @@ impl DiskController {
     fn do_command(&mut self, cmd: u8) {
         let block = self.block as usize;
         let bs = self.geom.block_size;
+        // Any read/write/flush command counts as drive activity.
+        if matches!(cmd, CMD_READ | CMD_WRITE | CMD_FLUSH) {
+            self.mark_active();
+        }
         match cmd {
             CMD_READ => {
                 let mut buf = vec![0u8; bs];
@@ -151,6 +182,7 @@ impl DiskController {
         if !self.writing {
             return;
         }
+        self.mark_active();
         if self.cursor < self.buffer.len() {
             self.buffer[self.cursor] = val;
             self.cursor += 1;
@@ -174,6 +206,7 @@ impl DiskController {
     /// A DATA-port read: return the next byte of the read buffer (auto-advancing).
     fn data_read(&mut self) -> u8 {
         if self.cursor < self.buffer.len() {
+            self.mark_active();
             let b = self.buffer[self.cursor];
             self.cursor += 1;
             b
@@ -186,6 +219,13 @@ impl DiskController {
 impl Device for DiskController {
     fn ports(&self) -> &[u8] {
         &self.ports
+    }
+
+    /// Decay the per-station activity timers so the LEDs turn off a short while after I/O stops.
+    fn tick(&mut self, cycles: u32) {
+        for a in &mut self.activity {
+            *a = a.saturating_sub(cycles);
+        }
     }
 
     fn io_in(&mut self, port: u8) -> u8 {

@@ -120,6 +120,26 @@ fn stations_are_independent() {
 }
 
 #[test]
+fn activity_led_lights_on_access_and_decays() {
+    use cpt_machine::disk::Station;
+    let base = 0x50;
+    let mut ctrl = DiskController::new(base, geom());
+    ctrl.mount(Station::A, DiskImage::blank(geom()));
+
+    assert!(!ctrl.is_active(Station::A), "idle at start");
+
+    // A read command marks the station active.
+    ctrl.io_out(base, 0); // select A
+    ctrl.io_out(base + 3, 1); // CMD_READ
+    assert!(ctrl.is_active(Station::A), "active right after a read");
+    assert!(!ctrl.is_active(Station::B), "B untouched");
+
+    // Ticking enough cycles lets the activity decay (LED turns off).
+    ctrl.tick(200_000); // > ACTIVITY_HOLD_CYCLES
+    assert!(!ctrl.is_active(Station::A), "LED off after the hold window elapses");
+}
+
+#[test]
 fn runtime_mount_and_eject() {
     let base = 0x50;
     let mut ctrl = DiskController::new(base, geom());

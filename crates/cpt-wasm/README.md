@@ -30,9 +30,20 @@ node crates/cpt-wasm/web/check.mjs   # instantiates the wasm and prints decoded 
 
 ## Exports (C ABI)
 
-`cpt_init`, `cpt_run_frame`, `cpt_page_ptr`, `cpt_page_len`, `cpt_cols`, `cpt_rows`,
+Display: `cpt_init`, `cpt_run_frame`, `cpt_page_ptr`, `cpt_page_len`, `cpt_cols`, `cpt_rows`,
 `cpt_retraces`, and layout-row accessors. The page buffer at `cpt_page_ptr()` is
 `cpt_page_len()` bytes of character codes, row-major.
+
+Disk drives (stations 0 = A, 1 = B):
+- `cpt_xfer_reserve(len) -> ptr` / `cpt_xfer_ptr()` / `cpt_xfer_len()` — a scratch buffer for
+  moving disk bytes between JS and wasm.
+- `cpt_disk_mount(station)` — mount the current transfer-buffer bytes as a disk in `station`.
+- `cpt_disk_eject(station) -> len` — flush + detach; the image bytes land in the transfer
+  buffer for download.
+- `cpt_disk_mounted(station) -> 0|1` — bay state for the UI.
+
+The web page shows two drive bays beside the screen with Insert (file picker) / Eject
+(download) buttons.
 
 ## Notes
 

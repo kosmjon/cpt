@@ -67,14 +67,19 @@ Status tags used in the specs:
 ### Display
 - [ ] D1. "Special display memory": dedicated display-board region vs. window into banked RAM.
 - [ ] D2. Page model: confirm/deny the linked-list-of-lines structure; node format.
-- [ ] D3. Character-bitmap **font ROM** dump (exact glyphs) + character cell size.
-- [ ] D4. Character-code encoding the software writes into display RAM.
+- [x] D3. Font ROM: NOT obtainable — a faithful substitute monospaced font is the permanent
+      plan. (Only the character cell size remains useful to confirm.)
+- [ ] D4. Character-code encoding (code->glyph) AND the **in-band control/attribute codes** the
+      video hardware interpreted — notably the per-line **black-on-white vs. white-on-black
+      (inverse)** code. User will provide exact codes.
 - [ ] D5. Whether 80×54 includes/excludes the status band and ruler row.
 - [ ] D6. Status-band fields and layout (observed `IN`, doc id, page/line).
 - [ ] D7. Ruler / margin-marker / tab encoding in display memory.
 - [ ] D8. Which physical row is the typing line; how document-scroll is realized.
 
 ### Keyboard
+- NOTE: keyboard is confirmed **N-key rollover, interrupt-driven** (make/break events). The
+  emulator models that; only the codes/ports/encoding below remain [VERIFY].
 - [ ] K1. Per-key **codes / scan matrix** (layout + labels already known from the keyboard
       photo: left function column incl. `MAR SET`/`MAR REL`; typewriter block; center
       editing/navigation cluster with unit selectors `CHAR`/`WORD`/`LINE`/`PARA`/`PAGE`,

@@ -13,7 +13,11 @@
 //!   * layout row accessors    — so the UI can mark title/typing/status regions.
 //!   * `cpt_retraces()`        — count of retrace interrupts raised (a frame counter).
 
-use cpt_machine::{DisplayDevice, Executive, Machine, MachineConfig};
+use cpt_machine::disk::Station;
+use cpt_machine::{
+    DiskController, DiskImage, DisplayDevice, Executive, Geometry, KeyboardDevice, Machine,
+    MachineConfig,
+};
 use i8080_cpu::Cpu;
 use std::cell::RefCell;
 
@@ -24,19 +28,63 @@ const ROWS: usize = cpt_machine::ROWS;
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static PAGE: RefCell<Vec<u8>> = RefCell::new(vec![0u8; ROWS * COLS]);
+    /// Scratch buffer for transferring disk bytes between JS and wasm (mount in / eject out).
+    static XFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
 }
 
 struct State {
     exec: Executive,
     cycles_per_frame: u64,
+    /// Index of the disk controller among the machine's devices.
+    disk_dev: usize,
+    /// Index of the keyboard device among the machine's devices.
+    kbd_dev: usize,
+    geom: Geometry,
+}
+
+impl State {
+    fn disk(&mut self) -> Option<&mut DiskController> {
+        self.exec
+            .machine
+            .device_mut(self.disk_dev)?
+            .as_any_mut()
+            .downcast_mut::<DiskController>()
+    }
+
+    fn keyboard(&mut self) -> Option<&mut KeyboardDevice> {
+        self.exec
+            .machine
+            .device_mut(self.kbd_dev)?
+            .as_any_mut()
+            .downcast_mut::<KeyboardDevice>()
+    }
+}
+
+fn station_of(n: u32) -> Station {
+    if n == 0 {
+        Station::A
+    } else {
+        Station::B
+    }
 }
 
 /// Initialize the machine: attach the display and load the built-in demo program.
 #[no_mangle]
 pub extern "C" fn cpt_init() {
     let cfg = MachineConfig::default();
+    let geom = Geometry::default();
     let mut machine = Machine::new(cfg.clone());
     machine.attach_display(DisplayDevice::new(cfg.retrace_period_cycles, cfg.retrace_vector));
+    // Attach the disk controller (both stations start empty). It is device index 1 (the display
+    // is index 0).
+    let disk_dev = machine.device_count();
+    machine.attach_device(Box::new(DiskController::new(cfg.disk_base_port, geom)));
+    // Attach the interrupt-driven keyboard (device index 2).
+    let kbd_dev = machine.device_count();
+    machine.attach_device(Box::new(KeyboardDevice::new(
+        cfg.keyboard_base_port,
+        cfg.keyboard_vector,
+    )));
     machine.mem.load_bank0(0x0100, &cpt_machine::demo::display_demo());
 
     let mut cpu = Cpu::new();
@@ -47,6 +95,9 @@ pub extern "C" fn cpt_init() {
         exec: Executive::new(cpu, machine),
         // One video frame of CPU time == one retrace period, so each frame drives ~one scroll.
         cycles_per_frame: cfg.retrace_period_cycles as u64,
+        disk_dev,
+        kbd_dev,
+        geom,
     };
     STATE.with(|s| *s.borrow_mut() = Some(state));
 }
@@ -117,4 +168,143 @@ pub extern "C" fn cpt_typing_row() -> usize {
 #[no_mangle]
 pub extern "C" fn cpt_status_row() -> usize {
     layout().status.0
+}
+
+// --- disk drives A and B ---
+//
+// Mount flow:  JS calls cpt_xfer_reserve(len) -> gets a pointer -> writes the disk file bytes
+// there -> calls cpt_disk_mount(station). Eject flow: JS calls cpt_disk_eject(station), which
+// copies the (flushed) image bytes into the transfer buffer and returns their length; JS then
+// reads them from cpt_xfer_ptr() to offer a download.
+
+/// Reserve `len` bytes in the transfer buffer and return a pointer JS can write into.
+#[no_mangle]
+pub extern "C" fn cpt_xfer_reserve(len: usize) -> *mut u8 {
+    XFER.with(|x| {
+        let mut b = x.borrow_mut();
+        b.clear();
+        b.resize(len, 0);
+        b.as_mut_ptr()
+    })
+}
+
+/// Pointer to the transfer buffer (valid until the next reserve).
+#[no_mangle]
+pub extern "C" fn cpt_xfer_ptr() -> *const u8 {
+    XFER.with(|x| x.borrow().as_ptr())
+}
+
+/// Length of the transfer buffer.
+#[no_mangle]
+pub extern "C" fn cpt_xfer_len() -> usize {
+    XFER.with(|x| x.borrow().len())
+}
+
+/// Mount the current transfer-buffer contents as a disk image in `station` (0=A, 1=B).
+/// The bytes are padded/truncated to the configured geometry. Returns 1 on success.
+#[no_mangle]
+pub extern "C" fn cpt_disk_mount(station: u32) -> u32 {
+    STATE.with(|s| {
+        let mut sref = s.borrow_mut();
+        let Some(st) = sref.as_mut() else { return 0 };
+        let geom = st.geom;
+        let bytes = XFER.with(|x| x.borrow().clone());
+        let mut img = DiskImage::blank(geom);
+        // Copy as many whole blocks as the data provides.
+        let bs = geom.block_size;
+        let blocks = (bytes.len() / bs).min(geom.block_count);
+        for b in 0..blocks {
+            img.write_block(b, &bytes[b * bs..(b + 1) * bs]);
+        }
+        if let Some(ctrl) = st.disk() {
+            ctrl.mount(station_of(station), img);
+            1
+        } else {
+            0
+        }
+    })
+}
+
+/// Eject `station`, copying its (flushed) image bytes into the transfer buffer. Returns the
+/// number of bytes available (0 if nothing was mounted).
+#[no_mangle]
+pub extern "C" fn cpt_disk_eject(station: u32) -> usize {
+    STATE.with(|s| {
+        let mut sref = s.borrow_mut();
+        let Some(st) = sref.as_mut() else { return 0 };
+        let target = station_of(station);
+        let Some(ctrl) = st.disk() else { return 0 };
+        // Safety: refuse to eject while the drive is actively reading/writing (LED lit),
+        // mirroring the physical eject button.
+        if ctrl.is_active(target) {
+            return 0;
+        }
+        match ctrl.eject(target) {
+            Some(img) => {
+                let bytes = img.bytes().to_vec();
+                let len = bytes.len();
+                XFER.with(|x| *x.borrow_mut() = bytes);
+                len
+            }
+            None => 0,
+        }
+    })
+}
+
+/// 1 if `station` has a disk mounted, else 0.
+#[no_mangle]
+pub extern "C" fn cpt_disk_mounted(station: u32) -> u32 {
+    STATE.with(|s| {
+        s.borrow_mut()
+            .as_mut()
+            .and_then(|st| {
+                let target = station_of(station);
+                st.disk().map(|c| c.is_mounted(target) as u32)
+            })
+            .unwrap_or(0)
+    })
+}
+
+// --- keyboard ---
+//
+// The host (JS) captures real PC keystrokes for the non-special keys and forwards them as CPT
+// key codes via these two functions. The special-key panel calls the same key-down with the
+// special key's code. (The PC-key -> CPT-code mapping is [VERIFY]; JS uses a placeholder.)
+
+/// Deliver a key **press** (make) event with CPT key `code`.
+#[no_mangle]
+pub extern "C" fn cpt_key_down(code: u32) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow_mut().as_mut() {
+            if let Some(kbd) = st.keyboard() {
+                kbd.push_key(code as u8);
+            }
+        }
+    });
+}
+
+/// Deliver a key **release** (break) event with CPT key `code` (N-key rollover).
+#[no_mangle]
+pub extern "C" fn cpt_key_up(code: u32) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow_mut().as_mut() {
+            if let Some(kbd) = st.keyboard() {
+                kbd.push_key_up(code as u8);
+            }
+        }
+    });
+}
+
+/// 1 if `station`'s activity LED is lit (recent read/write), else 0.
+#[no_mangle]
+pub extern "C" fn cpt_disk_active(station: u32) -> u32 {
+    STATE.with(|s| {
+        s.borrow_mut()
+            .as_mut()
+            .and_then(|st| {
+                let target = station_of(station);
+                st.disk().map(|c| c.is_active(target) as u32)
+            })
+            .unwrap_or(0)
+    })
 }

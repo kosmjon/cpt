@@ -109,11 +109,21 @@ This is the **second** of two coordinated specs; the first is the MOL80 assemble
     document), not to core emulation. **[HYPOTHESIS]**
   - Open: whether the scanned display memory is a **separate region (dedicated display RAM on
     the display board)** or a **window into main/banked RAM**. **[VERIFY]**
-- The display board carries a **character-bitmap ROM** that supplies the glyph pixel patterns.
-  Character shapes are therefore a **hardware asset read by the display hardware**, not stored
-  in CPU-addressable memory. The system software writes **character codes** (and attributes) into
-  display RAM; the display board turns each code into pixels via its font ROM. **[CONFIRMED]**
-  (the actual ROM contents / font are **[VERIFY]** pending a dump)
+- The display board carried a **character-bitmap ROM** that supplied the glyph pixel patterns.
+  Character shapes are a hardware asset the display hardware read, not stored in CPU-addressable
+  memory. The system software writes **character codes** into display RAM; the board turned each
+  into pixels via its font ROM. **[CONFIRMED]**
+  - **The font ROM is NOT obtainable** — we will not have the authentic glyph bitmaps. The
+    permanent plan is a **faithful substitute font** (a clean monospaced face that reads like a
+    late-1970s CRT), not a placeholder awaiting a dump. The character-code→glyph *mapping* still
+    matters; only the exact pixel shapes are approximated. **[CONFIRMED: ROM unavailable]**
+- **In-band display control codes.** Not every byte in display RAM is a character — some byte
+  values are **control/attribute codes the video hardware interpreted**, not glyphs. A known
+  example: a code that sets a line to **black-on-white vs. white-on-black (inverse video)**.
+  The emulator's display model must therefore treat certain codes as **rendering-state changes**
+  (e.g. inverse on/off), applied by the display device / renderer, rather than passing them
+  through as characters. The exact codes are **[VERIFY]** (user will provide); the model — an
+  attribute/control layer over the character RAM — is **[CONFIRMED]**.
 - The screen has a **dark status/header band above the page-white area** showing
   mode/document/page/line indicators (observed on a CPT 9000: fields like `IN`, a document
   id `1 RF2025`, and page/line `1 22`). The page-white document area is a distinct region
@@ -172,11 +182,13 @@ This is the **second** of two coordinated specs; the first is the MOL80 assemble
 5. Which segments are **`bank0`-tagged** vs. relocatable; the tagging mechanism in source;
    total bank-0 footprint (must fit one 32K block); the **work-block heap** location/size from
    the allocator source.
-6. Display hardware: the **character-bitmap ROM contents** on the display board (a font-ROM
-   dump would give exact glyphs), character cell size, refresh model, and any attributes
-   (bold/underline/inverse).
-7. The **character-code encoding** the system software writes into display RAM (i.e. which
-   code maps to which font-ROM glyph).
+6. Display hardware: character cell size and refresh model. (The font ROM itself is **not
+   obtainable** — a faithful substitute font is the permanent plan, so exact glyph bitmaps are
+   no longer an open item.)
+7. The **character-code encoding** (which code maps to which glyph) AND the set of **in-band
+   control/attribute codes** the video hardware interpreted — notably the code(s) selecting
+   **black-on-white vs. white-on-black (inverse) per line**, plus any others. User will
+   provide the exact codes.
 8. **Display memory model:** confirm the "special display memory" — is it a dedicated region
    on the display board or a window into main/banked RAM? Confirm the system software's
    **linked-list-of-lines** page representation and its node format (confirm/deny the

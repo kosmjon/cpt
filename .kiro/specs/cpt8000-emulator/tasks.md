@@ -53,8 +53,9 @@
   - [ ] 6.4 Placeholder char set/font until the real char ROM is known ([VERIFY]) — deferred to the UI/font layer.
     - _Requirements: 3.4_
 
-- [ ] 7. Implement the keyboard device
-  - Queue key events from the UI; present to CPU via ports/IRQ ([VERIFY] scan codes/matrix).
+- [~] 7. Implement the keyboard device
+  - [x] `KeyboardDevice`: FIFO of key events, STATUS/DATA ports, **interrupt-driven** (RST on key event) matching the real N-key-rollover keyboard; make/break (press/release) events via `push_key`/`push_key_up`. Verified end-to-end (key IRQ -> handler reads code). Wasm `cpt_key_down`/`cpt_key_up` wired; web UI forwards the real PC keyboard for non-special keys and the on-screen panel for special keys.
+  - [ ] Replace placeholder scan/key codes, ports, and make/break encoding with the real ones ([VERIFY] from source).
   - _Requirements: 5.1, 5.2, 5.3_
 
 - [~] 8. Implement the file-backed data disk

@@ -107,7 +107,7 @@ pub struct MachineConfig {
     display_ports: PortRange,   // [VERIFY]
     keyboard_ports: PortRange,  // [VERIFY]
     disk_ports: PortRange,      // [VERIFY]
-    font_rom: FontRom,          // display-board character-bitmap ROM (placeholder until dumped)
+    // (no font-ROM field: the authentic ROM is unobtainable; the UI uses a substitute font)
     // ... other device port assignments
 }
 ```
@@ -169,13 +169,18 @@ pub trait Device {
 ```
 
 - **Display device:** owns the **scanned display memory** — the region the video hardware
-  reads each frame — into which the CPT software loads the current page's character codes (and
-  attributes). This is the hardware boundary the emulator models. Glyph pixels come from a
-  **font ROM that models the display board's character-bitmap ROM** — a separate hardware
-  asset, not CPU-addressable. The device presents a stable `page_snapshot() -> PageBuffer` of
-  character codes to the UI; the UI (or a shared helper) rasterizes codes to pixels through the
-  `FontRom`. A placeholder monospaced font stands in until a real ROM dump is available (a
-  drop-in replacement).
+  reads each frame — into which the CPT software loads the current page's bytes. This is the
+  hardware boundary the emulator models. Two subtleties:
+  - **In-band control codes.** Not every byte is a character. Some byte values are
+    **control/attribute codes the video hardware interpreted** — notably selecting
+    **black-on-white vs. white-on-black (inverse) per line**. The display device / renderer
+    must interpret these as rendering-state changes rather than emit a glyph. The exact codes
+    are [VERIFY] (user will provide); the model is an attribute layer walked alongside the
+    character bytes. The `page_snapshot()` the UI consumes should therefore expose per-cell (or
+    per-line) attributes, not just raw codes.
+  - **Font.** The display board's character-bitmap ROM is **not obtainable**, so a **faithful
+    substitute monospaced font is the permanent renderer**, not a placeholder awaiting a dump.
+    The character-code→glyph mapping is modeled; only the pixel shapes are approximated.
   - **Software vs. hardware boundary:** the CPT software is believed to keep the page as a
     **linked list of lines** in RAM and project the visible window into this scanned display
     memory on scroll/edit. The emulator does **not** model the linked list — it renders only
@@ -281,10 +286,11 @@ This is the defining UX and gets explicit modeling.
 ## Risks & open questions
 
 - `[VERIFY]` values (bank-select port + encoding, bank-0-vs-pool split, bank-switch timing,
-  display memory model + char ROM, key matrix, IRQ sources, data-disk interface, and — from
-  the system source — the segment-table/fixed-address-table formats, `bank0` tagging, entry
-  point, and heap region) are isolated behind `MachineConfig`, the device traits, and the
-  link step.
+  display memory model + **in-band control/attribute codes** incl. inverse-video, key matrix,
+  IRQ sources, data-disk interface, and — from the system source — the
+  segment-table/fixed-address-table formats, `bank0` tagging, entry point, and heap region)
+  are isolated behind `MachineConfig`, the device traits, and the link step. (The font ROM is
+  not an open item — it is unobtainable, so a substitute font is the permanent plan.)
 - The ultimate test is **running the linked system image** of the real CPT source. Since we
   have that source (no dumps needed), the critical dependencies are the link step producing
   correct bank-0 tables and the assembler's Layer-2 coverage. Until the full system builds,

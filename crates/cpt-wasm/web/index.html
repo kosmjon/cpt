@@ -41,33 +41,192 @@
       }
       .nameplate {
         position: absolute;
-        bottom: 20px;
-        right: 48px;
-        font: 600 14px system-ui, sans-serif;
-        letter-spacing: 2px;
+        top: 14px;
+        left: 20px;
+        font: 700 15px system-ui, sans-serif;
+        letter-spacing: 3px;
         color: #d8cfbb;
-        opacity: 0.8;
+        opacity: 0.85;
       }
       #status {
         font-family: "Courier New", monospace;
         opacity: 0.7;
       }
-      h1 {
-        font-size: 1rem;
-        font-weight: 600;
-        opacity: 0.8;
+      /* Display and drive bays side by side. */
+      .workstation {
+        display: flex;
+        align-items: stretch;
+        gap: 16px;
+      }
+      /* Two 8-inch drives side by side, top-aligned (leaving room beneath for keyboard keys). */
+      .drives {
+        display: flex;
+        gap: 14px;
+        align-self: flex-start; /* top-align against the display */
+      }
+      /* A black 8-inch drive unit. The drive letter sits in the top-left; the single button
+         (with its activity LED) is centered in the face below it. */
+      .drive {
+        position: relative;
+        width: 120px;
+        background: linear-gradient(150deg, #1c1e20, #0c0d0e);
+        border-radius: 8px;
+        padding: 34px 14px 16px; /* extra top padding leaves room for the drive letter */
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55), inset 0 1px 1px rgba(255, 255, 255, 0.06);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      /* A loaded drive gets a faint amber edge so you can tell a disk is in at a glance. */
+      .drive.loaded {
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(210, 170, 90, 0.4);
+      }
+      .drive-letter {
+        position: absolute;
+        top: 12px;
+        left: 14px;
+        color: #6a6f73;
+        font: 700 13px system-ui, sans-serif;
+        letter-spacing: 3px;
+      }
+      /* The single unmarked button, with a red LED centered in it. Centered horizontally in the
+         drive face, below the drive letter. Taller now that the slot is gone. */
+      .drive-btn {
+        align-self: center;
+        margin: 10px 0 14px;
+        width: 30px;
+        height: 70px;
+        border: none;
+        border-radius: 5px;
+        background: linear-gradient(180deg, #2b2d30, #141516);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.05s;
+      }
+      .drive-btn:active {
+        transform: translateY(1px);
+      }
+      /* The LED: dark red when idle, bright glowing red when the drive is active. */
+      .led {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #3a0c0c;
+        box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.8);
+        transition: background 0.1s, box-shadow 0.1s;
+      }
+      .led.on {
+        background: #ff2a2a;
+        box-shadow: 0 0 8px 2px rgba(255, 40, 40, 0.8), inset 0 0 2px rgba(255, 180, 180, 0.9);
+      }
+
+      /* Right column: drives on top, special keys beneath. */
+      .right-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        align-self: flex-start;
+      }
+
+      /* Special-key cluster: a 5x5 grid of square keycaps on a dark panel. */
+      .special-keys {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        grid-auto-rows: 44px;
+        gap: 7px;
+        background: linear-gradient(150deg, #23262a, #15171a);
+        padding: 12px;
+        border-radius: 10px;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.06);
+      }
+      /* A realistic 3D square keycap. */
+      .key {
+        position: relative;
+        border: none;
+        border-radius: 5px;
+        background: linear-gradient(180deg, #e9e6df, #c2bdb2);
+        box-shadow: 0 3px 0 #8f8a7e, 0 4px 5px rgba(0, 0, 0, 0.45),
+          inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        color: #2a2b28;
+        font: 700 8.5px system-ui, sans-serif;
+        letter-spacing: 0.3px;
+        line-height: 1.15;
+        text-align: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px;
+        cursor: pointer;
+        user-select: none;
+        transition: transform 0.04s, box-shadow 0.04s;
+      }
+      /* Pressed: the cap sinks and its shadow collapses (tactile click). */
+      .key:active,
+      .key.pressed {
+        transform: translateY(3px);
+        box-shadow: 0 0 0 #8f8a7e, 0 1px 2px rgba(0, 0, 0, 0.4),
+          inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+      /* A locking key that is locked ON: amber cap + a lit corner indicator. */
+      .key.locked {
+        background: linear-gradient(180deg, #ffe08a, #e8b84e);
+      }
+      .key.locked::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #c85a00;
+        box-shadow: 0 0 5px 1px rgba(255, 140, 0, 0.9);
+      }
+      /* The one blank position keeps the grid shape but isn't a button. */
+      .key.blank {
+        background: #1b1d20;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+        cursor: default;
       }
     </style>
   </head>
   <body>
-    <h1>CPT 8000 / 9000 — page-white display (WebAssembly)</h1>
-    <div class="case">
-      <div class="bezel">
-        <canvas id="screen"></canvas>
+    <div class="workstation">
+      <div class="case">
+        <div class="nameplate">CPT 8000</div>
+        <div class="bezel">
+          <canvas id="screen"></canvas>
+        </div>
       </div>
-      <div class="nameplate">CPT</div>
+
+      <!-- Right column: dual 8-inch disk drives on top, special-key cluster beneath them. -->
+      <div class="right-panel">
+        <div class="drives">
+          <div class="drive" data-station="0">
+            <div class="drive-letter">A</div>
+            <button class="drive-btn" title="Insert / Eject">
+              <span class="led"></span>
+            </button>
+          </div>
+          <div class="drive" data-station="1">
+            <div class="drive-letter">B</div>
+            <button class="drive-btn" title="Insert / Eject">
+              <span class="led"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Special-key cluster: 5 columns x 5 keys. Populated by cpt.js. -->
+        <div class="special-keys" id="specialKeys"></div>
+      </div>
     </div>
+
     <div id="status">loading…</div>
+    <!-- hidden file input reused by both Insert buttons -->
+    <input type="file" id="fileInput" style="display: none" />
     <script src="cpt.js"></script>
   </body>
 </html>

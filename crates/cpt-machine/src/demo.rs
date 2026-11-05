@@ -15,6 +15,18 @@ const TYPING_ROW: u16 = 45;
 const STATUS_ROW: u16 = 54;
 const TOP_FIRST: u16 = 1; // first top-half text row
 const TOP_LAST: u16 = 44; // last top-half text row
+const BOTTOM_FIRST: u16 = 46; // first bottom-half row (where disk blocks are shown)
+
+// Disk controller ports (must match MachineConfig::default().disk_base_port = 0x50).
+const DISK_BASE: u8 = 0x50;
+const DISK_STATION: u8 = DISK_BASE; // +0 select station (0=A)
+const DISK_BLOCK_LO: u8 = DISK_BASE + 1;
+const DISK_BLOCK_HI: u8 = DISK_BASE + 2;
+const DISK_COMMAND: u8 = DISK_BASE + 3; // out=command (1=read), in=status
+const DISK_DATA: u8 = DISK_BASE + 4;
+
+// A scratch byte in bank-0 RAM holding the next block number to read.
+const CUR_BLOCK: u16 = 0x0200;
 
 fn row_addr(row: u16) -> u16 {
     DISPLAY_BASE + row * COLS
@@ -85,6 +97,27 @@ impl Asm {
     fn ret(&mut self) {
         self.byte(0xC9);
     }
+    // I/O and memory accessors used by the disk-read routine.
+    fn out(&mut self, port: u8) {
+        self.bytes(&[0xD3, port]);
+    }
+    fn in_a(&mut self, port: u8) {
+        self.bytes(&[0xDB, port]);
+    }
+    fn sta(&mut self, addr: u16) {
+        self.byte(0x32);
+        self.bytes(&addr.to_le_bytes());
+    }
+    fn lda(&mut self, addr: u16) {
+        self.byte(0x3A);
+        self.bytes(&addr.to_le_bytes());
+    }
+    fn ani(&mut self, v: u8) {
+        self.bytes(&[0xE6, v]);
+    }
+    fn inr_a(&mut self) {
+        self.byte(0x3C);
+    }
     fn len_at(&self, base: u16) -> u16 {
         base + self.code.len() as u16
     }
@@ -150,14 +183,84 @@ pub fn display_demo() -> Vec<u8> {
     a.mvi_m(b'>');
 
     // 5. Status line.
-    write_string(&mut a, row_addr(STATUS_ROW), "STATUS: running");
+    write_string(&mut a, row_addr(STATUS_ROW), "STATUS: running - mount a disk in drive A");
 
-    // 6. Enable interrupts and idle, letting retraces drive the scroll.
-    let idle = a.len_at(BASE);
+    // 6. Initialize the current-block counter to 0.
+    a.mvi_a(0);
+    a.sta(CUR_BLOCK);
+
+    // 7. Enable interrupts, then enter the main loop: on each pass, try to read the current
+    //    block from drive A and display it, then advance and pace with a delay. The retrace
+    //    handler keeps scrolling the top half independently.
     a.ei();
-    a.jmp(idle); // loop forever at the EI/JMP (EI re-arms each pass)
+    let main_loop = a.len_at(BASE);
+
+    // --- select station A, set block number from CUR_BLOCK, issue READ ---
+    a.mvi_a(0);
+    a.out(DISK_STATION); // station A
+    a.lda(CUR_BLOCK);
+    a.out(DISK_BLOCK_LO); // block low = CUR_BLOCK (0..255 is plenty for the demo)
+    a.mvi_a(0);
+    a.out(DISK_BLOCK_HI); // block high = 0
+    a.mvi_a(1);
+    a.out(DISK_COMMAND); // CMD_READ
+
+    // --- check status: if no-media (bit7) set, skip drawing this pass ---
+    a.in_a(DISK_COMMAND); // A = status
+    a.ani(0x80); // test no-media bit
+    // if non-zero (no media), jump past the draw to the delay.
+    let skip_target_placeholder = a.len_at(BASE); // we patch this by emitting jnz to a known addr
+    let _ = skip_target_placeholder;
+    // We need the address *after* the draw block. Emit the draw into a temp to learn its size,
+    // then emit the real jnz. Simpler: compute the draw block length by building it separately.
+    let draw = build_draw_block(BASE + (a.code.len() as u16) + 3); // +3 for the JNZ we emit next
+    a.jnz(draw.skip_addr); // if no media -> skip the draw
+    a.bytes(&draw.code);
+
+    // --- advance CUR_BLOCK (wrap via byte overflow is fine for the demo) ---
+    a.lda(CUR_BLOCK);
+    a.inr_a();
+    a.sta(CUR_BLOCK);
+
+    // --- delay loop so blocks appear at a visible pace (BC counts down from ~0) ---
+    // LXI B,0x0000 ; delay: DCX B ; MOV A,B ; ORA C ; JNZ delay
+    a.lxi_b(0x0000);
+    let delay = a.len_at(BASE);
+    a.dcx_b();
+    a.mov_a_b();
+    a.ora_c();
+    a.jnz(delay);
+
+    a.jmp(main_loop);
 
     a.code
+}
+
+/// The "draw one block" code block, plus the address immediately after it (the skip target the
+/// no-media branch jumps to). `start` is the absolute address where this block will be placed.
+struct DrawBlock {
+    code: Vec<u8>,
+    skip_addr: u16,
+}
+
+/// Build code that streams 128 bytes from the DISK_DATA port into the bottom-half region
+/// (starting at BOTTOM_FIRST). Clobbers A, B, H, L.
+fn build_draw_block(start: u16) -> DrawBlock {
+    let mut a = Asm::default();
+    // HL = destination (bottom-half first row); B = 128 byte counter.
+    a.lxi_h(row_addr(BOTTOM_FIRST));
+    a.mvi_a(128);
+    // move the counter into B via MOV B,A (0x47)
+    a.byte(0x47); // MOV B,A
+    // loop: IN DISK_DATA ; MOV M,A ; INX H ; DCR B ; JNZ loop
+    let loop_addr = start + a.code.len() as u16;
+    a.in_a(DISK_DATA);
+    a.mov_m_a();
+    a.inx_h();
+    a.byte(0x05); // DCR B
+    a.jnz(loop_addr);
+    let skip_addr = start + a.code.len() as u16;
+    DrawBlock { code: a.code, skip_addr }
 }
 
 /// Emit code that writes `ch` into `count` consecutive cells starting at `addr`
