@@ -18,8 +18,11 @@ Status tags used in the specs:
 - [ ] 1. Logical-operator spelling: confirm `+*`=AND, `-*`=OR, `**`=XOR.
 - [ ] 2. Rotate mnemonics/direction: `>` meaning; which of RLC/RRC/RAL/RAR each form is.
 - [ ] 3. Radix markers for binary and hex literals.
-- [ ] 4. Data-definition directives (byte / word / string / reserve-storage) syntax.
-- [ ] 5. Assembler directives: ORG, EQU, any others.
+- [ ] 4. Data-definition directives (byte / word / string / reserve-storage) syntax — we use
+      placeholder `DB`/`DW`/`DS` for now; confirm the real MOL80 spellings.
+- [ ] 5. Assembler directives: `ORG`, EQU, any others — we use a placeholder `ORG`; confirm the
+      real spelling and whether EQU/others exist.
+      (Note: I/O via `A:PORT(n)`/`PORT(n):A` is CONFIRMED from the scan, not a placeholder.)
 - [ ] 6. Inline-comment start column; the block-comment (file-header) form.
 - [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists.
 - [ ] 8. The full verified table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 (256 entries).

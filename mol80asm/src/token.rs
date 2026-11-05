@@ -67,6 +67,10 @@ pub enum TokenKind {
     Flag(FlagKind),
     /// A numeric literal (already parsed to its value).
     Num(i64),
+    /// An I/O port operand `PORT(n)` (the parsed port number). [CONFIRMED from scan]
+    Port(u8),
+    /// A double-quoted string literal (contents, unescaped). Used by the `DB` directive.
+    Str(String),
 
     // --- operators / punctuation ---
     /// `:` assign/move (source : destination).

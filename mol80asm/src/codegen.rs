@@ -33,14 +33,22 @@ enum Emit {
     AddrRef { opcode: u8, label: String, span: Span },
     /// Marks where an internal/user label resolves to the current address. Zero bytes.
     LabelDef(String),
+    /// `ORG addr` — set the location counter. Forward moves zero-fill; backward is an error.
+    Org { addr: u16, span: Span },
+    /// `DS count` — reserve `count` zero bytes.
+    Space(u16),
 }
 
 impl Emit {
+    /// Size in bytes for the simple linear case. `Org` is handled specially by the passes
+    /// (it repositions the counter rather than adding a fixed size), so it reports 0 here.
     fn size(&self) -> u16 {
         match self {
             Emit::Bytes(b) => b.len() as u16,
             Emit::AddrRef { .. } => 3,
             Emit::LabelDef(_) => 0,
+            Emit::Org { .. } => 0,
+            Emit::Space(n) => *n,
         }
     }
 }
@@ -84,26 +92,67 @@ pub fn assemble(program: &Program, diags: &mut Diagnostics) -> Option<Assembly> 
         return None;
     }
 
-    // --- Pass 1: assign addresses to every LabelDef by summing sizes. ---
-    let origin = DEFAULT_ORG;
-    let mut addr = origin;
+    // --- Pass 1: assign addresses to every LabelDef, honoring ORG. ---
+    // The origin is the address of the first emitted byte: if the program leads with an ORG,
+    // that sets it; otherwise DEFAULT_ORG. We track the current address; ORG repositions it.
+    let mut origin: Option<u16> = None;
+    let mut addr = DEFAULT_ORG;
     for e in &emits {
-        if let Emit::LabelDef(name) = e {
-            // Internal labels (prefixed '@') and user labels share the same table.
-            symbols.define(name, addr, Span::new(0, 0, 0), diags);
+        match e {
+            Emit::Org { addr: target, span } => {
+                if let Some(o) = origin {
+                    // ORG after output has begun: only forward moves are supported (zero-fill).
+                    if *target < addr {
+                        diags.push(Diagnostic::error(
+                            format!("ORG {:#06X} moves backward (current {:#06X})", target, addr),
+                            *span,
+                        ));
+                    }
+                    let _ = o;
+                    addr = *target;
+                } else {
+                    // Leading ORG sets the origin.
+                    origin = Some(*target);
+                    addr = *target;
+                }
+            }
+            Emit::LabelDef(name) => {
+                if origin.is_none() {
+                    origin = Some(DEFAULT_ORG);
+                }
+                symbols.define(name, addr, Span::new(0, 0, 0), diags);
+            }
+            _ => {
+                if origin.is_none() {
+                    origin = Some(DEFAULT_ORG);
+                }
+                addr = addr.wrapping_add(e.size());
+            }
         }
-        addr = addr.wrapping_add(e.size());
     }
     if diags.has_errors() {
         return None;
     }
+    let origin = origin.unwrap_or(DEFAULT_ORG);
 
     // --- Pass 2: resolve references, emit bytes, and record relocations. ---
+    // `bytes` is the image starting at `origin`; ORG forward-fills with zeros so offsets stay
+    // consistent with the addresses assigned in pass 1.
     let mut bytes = Vec::new();
     let mut relocations = Vec::new();
     for e in &emits {
         match e {
             Emit::Bytes(b) => bytes.extend_from_slice(b),
+            Emit::Space(n) => bytes.extend(std::iter::repeat(0u8).take(*n as usize)),
+            Emit::Org { addr: target, .. } => {
+                // Zero-fill from the current output position up to the ORG target.
+                let cur = origin as usize + bytes.len();
+                let tgt = *target as usize;
+                if tgt > cur {
+                    bytes.extend(std::iter::repeat(0u8).take(tgt - cur));
+                }
+                // (backward ORG already reported as an error in pass 1)
+            }
             Emit::LabelDef(_) => {}
             Emit::AddrRef { opcode, label, span } => {
                 match symbols.get(label) {
@@ -221,6 +270,31 @@ fn lower_item(
         Item::DecPair { rp } => emit_or_err(encode_dcx(*rp), span, emits, diags),
 
         Item::AddPair { rp } => emit_or_err(encode_dad(*rp), span, emits, diags),
+
+        // --- directives ---
+        Item::Org { addr } => emits.push(Emit::Org { addr: *addr, span }),
+
+        Item::DefineBytes { items } => {
+            let mut bytes = Vec::new();
+            for it in items {
+                match it {
+                    crate::ast::DataItem::Byte(b) => bytes.push(*b),
+                    crate::ast::DataItem::Str(s) => bytes.extend_from_slice(s.as_bytes()),
+                }
+            }
+            emits.push(Emit::Bytes(bytes));
+        }
+
+        Item::DefineWords { values } => {
+            let mut bytes = Vec::new();
+            for v in values {
+                bytes.push((v & 0xFF) as u8); // little-endian
+                bytes.push((v >> 8) as u8);
+            }
+            emits.push(Emit::Bytes(bytes));
+        }
+
+        Item::DefineSpace { count } => emits.push(Emit::Space(*count)),
     }
 }
 

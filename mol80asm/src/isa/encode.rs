@@ -28,6 +28,14 @@ pub type Bytes = Vec<u8>;
 /// or the LXI family (16-bit immediate into a register pair).
 pub fn encode_move(src: &Operand, dst: &Operand) -> Result<Bytes, EncodeError> {
     match (src, dst) {
+        // `A:PORT(n)` -> OUT n (write A to port n).  [CONFIRMED from scan, opcode 0xD3]
+        (Operand::Reg(Reg::A), Operand::Port(n)) => Ok(vec![0xD3, *n]),
+        // `PORT(n):A` -> IN n (read port n into A).   [CONFIRMED from scan, opcode 0xDB]
+        (Operand::Port(n), Operand::Reg(Reg::A)) => Ok(vec![0xDB, *n]),
+        // A port with anything other than A is invalid (8080 IN/OUT only use A).
+        (Operand::Port(_), _) | (_, Operand::Port(_)) => Err(EncodeError::Unsupported(
+            "PORT(n) can only pair with A: `A:PORT(n)` (OUT) or `PORT(n):A` (IN)".to_string(),
+        )),
         // `HL:SP` -> SPHL (load SP from HL).
         (Operand::Reg(Reg::HL), Operand::Reg(Reg::SP)) => {
             Ok(vec![crate::isa::table::SPHL])

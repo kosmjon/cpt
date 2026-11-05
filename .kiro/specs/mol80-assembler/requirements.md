@@ -40,6 +40,14 @@ which will execute the code this tool produces.
   encoder emits a byte *sequence* per instruction, not always a single opcode. **[CONFIRMED]**
 - 16-bit pair ops: `rp+1:rp` = INX, `rp-1:rp` = DCX, `HL+rp:HL` = DAD, `HL*2:HL` = DAD H,
   `HL:SP` = SPHL. **[CONFIRMED from scan]**
+- **I/O ports:** `A:PORT(n)` = OUT n (opcode 211 = 0xD3), `PORT(n):A` = IN n (opcode 219 =
+  0xDB) — consistent with the `src:dst` rule (A written to / read from port n).
+  **[CONFIRMED from scan]**
+- **Assembler directives (our-convention placeholders; real MOL80 directive syntax is
+  [VERIFY]):** `ORG addr` sets the location counter (forward ORG zero-fills; backward is an
+  error); `DB item,...` defines bytes (numbers and `"strings"`); `DW value,...` defines
+  little-endian words; `DS count` reserves zero bytes. These let us write real programs (e.g.
+  the CP/M BIOS) now; spellings adjust when the manual confirms MOL80's directive syntax.
 
 ### MOL80 modules, relocation, and the object format (gates the linker)
 

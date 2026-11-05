@@ -102,6 +102,25 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
         Item::DecPair { rp } => emit(out, &format!("DCX {}", pair_name(*rp))),
 
         Item::AddPair { rp } => emit(out, &format!("DAD {}", pair_name(*rp))),
+
+        // Directives transpile to the standard 8080 assembler spellings.
+        Item::Org { addr } => emit(out, &format!("ORG {:04X}H", addr)),
+        Item::DefineSpace { count } => emit(out, &format!("DS {}", count)),
+        Item::DefineWords { values } => {
+            let list: Vec<String> = values.iter().map(|v| format!("{:04X}H", v)).collect();
+            emit(out, &format!("DW {}", list.join(",")));
+        }
+        Item::DefineBytes { items } => {
+            // Render bytes as hex and strings quoted.
+            let parts: Vec<String> = items
+                .iter()
+                .map(|it| match it {
+                    crate::ast::DataItem::Byte(b) => format!("{:02X}H", b),
+                    crate::ast::DataItem::Str(s) => format!("'{}'", s),
+                })
+                .collect();
+            emit(out, &format!("DB {}", parts.join(",")));
+        }
     }
 }
 
@@ -140,6 +159,8 @@ fn emit(out: &mut String, instr: &str) {
 
 fn move_mnemonic(src: &Operand, dst: &Operand) -> String {
     match (src, dst) {
+        (Operand::Reg(Reg::A), Operand::Port(n)) => format!("OUT {:02X}H", n),
+        (Operand::Port(n), Operand::Reg(Reg::A)) => format!("IN {:02X}H", n),
         (Operand::Reg(Reg::HL), Operand::Reg(Reg::SP)) => "SPHL".to_string(),
         (Operand::Reg(s), Operand::Reg(d)) => {
             find_mnemonic(Pattern::Move { src: *s, dst: *d })

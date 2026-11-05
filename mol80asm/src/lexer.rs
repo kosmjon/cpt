@@ -95,6 +95,29 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
+            // Double-quoted string literal (for DB). Runs to the closing quote (no escapes).
+            if c == '"' {
+                let mut j = i + 1;
+                while j < end && chars[j] != '"' {
+                    j += 1;
+                }
+                let s: String = chars[i + 1..j.min(end)].iter().collect();
+                if j < end && chars[j] == '"' {
+                    out.push(Token::new(
+                        TokenKind::Str(s),
+                        Span::new(line_no, col, (j - i + 1) as u32),
+                    ));
+                    i = j + 1;
+                } else {
+                    self.diags.push(crate::diag::Diagnostic::error(
+                        "unterminated string literal",
+                        Span::new(line_no, col, (end - i) as u32),
+                    ));
+                    i = end;
+                }
+                continue;
+            }
+
             // Multi-char operators, matched longest-first.
             if let Some((kind, width)) = self.match_operator(chars, i, end) {
                 out.push(Token::new(kind, Span::new(line_no, col, width as u32)));
@@ -117,6 +140,20 @@ impl<'a> Lexer<'a> {
                     j += 1;
                 }
                 let word: String = chars[i..j].iter().collect();
+
+                // Special form: PORT(n) — an I/O port operand. If `PORT` is immediately
+                // followed by `(`, consume `(n)` and emit a single Port token.
+                if word.eq_ignore_ascii_case("PORT") && j < end && chars[j] == '(' {
+                    if let Some((port, consumed)) = self.lex_port_tail(chars, j, end, line_no) {
+                        out.push(Token::new(
+                            TokenKind::Port(port),
+                            Span::new(line_no, col, (j - i + consumed) as u32),
+                        ));
+                        i = j + consumed;
+                        continue;
+                    }
+                }
+
                 let kind = classify_word(&word);
                 out.push(Token::new(kind, Span::new(line_no, col, (j - i) as u32)));
                 i = j;
@@ -172,6 +209,37 @@ impl<'a> Lexer<'a> {
             (')', _) => Some((TokenKind::RParen, 1)),
             _ => None,
         }
+    }
+
+    /// Lex the `(n)` tail of a `PORT(n)` operand, with `lp` at the `(`. Returns the port number
+    /// (0..=255) and the number of chars consumed (the `(`, the digits, and the `)`), or None if
+    /// the form is malformed (caller then falls back to treating `PORT` as an identifier).
+    fn lex_port_tail(
+        &mut self,
+        chars: &[char],
+        lp: usize,
+        end: usize,
+        line_no: u32,
+    ) -> Option<(u8, usize)> {
+        // Find the matching ')'.
+        let mut j = lp + 1;
+        while j < end && chars[j] != ')' {
+            j += 1;
+        }
+        if j >= end || chars[j] != ')' {
+            return None; // no closing paren
+        }
+        let inside: String = chars[lp + 1..j].iter().collect::<String>();
+        let inside = inside.trim();
+        let value = parse_number(inside)?;
+        if !(0..=255).contains(&value) {
+            self.diags.push(crate::diag::Diagnostic::error(
+                format!("port number {} out of range (0..=255)", value),
+                Span::new(line_no, (lp + 1) as u32, inside.chars().count() as u32),
+            ));
+            return Some((0, j - lp + 1));
+        }
+        Some((value as u8, j - lp + 1)) // consumed: '(' .. ')'
     }
 
     /// Lex a numeric literal starting at `i`. Returns (value, width-in-chars).

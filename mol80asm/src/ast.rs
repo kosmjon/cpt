@@ -75,6 +75,24 @@ pub enum Item {
     DecPair { rp: Reg },
     /// 16-bit add into HL: `HL+rp:HL` (DAD); `HL*2:HL` is DAD H.
     AddPair { rp: Reg },
+
+    // --- assembler directives (our-convention placeholder syntax; real MOL80 directive syntax
+    //     is [VERIFY] from the manual) ---
+    /// `ORG addr` — set the location counter to `addr`.
+    Org { addr: u16 },
+    /// `DB item, item, ...` — define bytes (numbers 0..=255 and/or "strings").
+    DefineBytes { items: Vec<DataItem> },
+    /// `DW value, ...` — define 16-bit words (emitted little-endian).
+    DefineWords { values: Vec<u16> },
+    /// `DS count` — reserve `count` zero bytes.
+    DefineSpace { count: u16 },
+}
+
+/// An item in a `DB` directive: a single byte value or a string (each char becomes a byte).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DataItem {
+    Byte(u8),
+    Str(String),
 }
 
 /// Operands that appear on either side of `:` or in ALU operations.
@@ -86,6 +104,8 @@ pub enum Operand {
     Imm(i64),
     /// A symbolic reference (label/symbol name), resolved later.
     Symbol(String),
+    /// An I/O port: `PORT(n)`. `A:PORT(n)` = OUT n, `PORT(n):A` = IN n. [CONFIRMED from scan]
+    Port(u8),
 }
 
 /// Target of a jump: an address, a label, or (future) an expression.

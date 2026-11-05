@@ -153,7 +153,7 @@ impl<'a> Parser<'a> {
             return Some(Item::Jump { target });
         }
 
-        // Bare keyword items: `CALL(target)` and `RTN`.
+        // Bare keyword items: `CALL(target)`, `RTN`, and the assembler directives.
         if let TokenKind::Ident(name) = self.peek() {
             if name.eq_ignore_ascii_case("CALL") {
                 return self.parse_call();
@@ -161,6 +161,15 @@ impl<'a> Parser<'a> {
             if name.eq_ignore_ascii_case("RTN") {
                 self.advance();
                 return Some(Item::Return);
+            }
+            if name.eq_ignore_ascii_case("ORG")
+                || name.eq_ignore_ascii_case("DB")
+                || name.eq_ignore_ascii_case("DW")
+                || name.eq_ignore_ascii_case("DS")
+            {
+                let kw = name.clone();
+                self.advance();
+                return self.parse_directive(&kw);
             }
         }
 
@@ -291,6 +300,80 @@ impl<'a> Parser<'a> {
             let sp = self.peek_span();
             self.error("expected ':'", sp);
             None
+        }
+    }
+
+    /// Parse an assembler directive (`ORG`/`DB`/`DW`/`DS`) after its keyword was consumed.
+    /// Placeholder syntax (our convention; real MOL80 directive syntax is [VERIFY]).
+    fn parse_directive(&mut self, kw: &str) -> Option<Item> {
+        let kw = kw.to_ascii_uppercase();
+        match kw.as_str() {
+            "ORG" => {
+                let n = self.expect_number()?;
+                Some(Item::Org { addr: n as u16 })
+            }
+            "DS" => {
+                let n = self.expect_number()?;
+                Some(Item::DefineSpace { count: n as u16 })
+            }
+            "DW" => {
+                let mut values = Vec::new();
+                loop {
+                    values.push(self.expect_number()? as u16);
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                Some(Item::DefineWords { values })
+            }
+            "DB" => {
+                let mut items = Vec::new();
+                loop {
+                    match self.peek().clone() {
+                        TokenKind::Num(n) => {
+                            self.advance();
+                            if !(0..=255).contains(&n) {
+                                let sp = self.peek_span();
+                                self.error(format!("DB byte value {} out of range", n), sp);
+                            }
+                            items.push(DataItem::Byte(n as u8));
+                        }
+                        TokenKind::Str(s) => {
+                            self.advance();
+                            items.push(DataItem::Str(s));
+                        }
+                        other => {
+                            let sp = self.peek_span();
+                            self.error(format!("expected a byte or string in DB, found {:?}", other), sp);
+                            return None;
+                        }
+                    }
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                Some(Item::DefineBytes { items })
+            }
+            _ => None,
+        }
+    }
+
+    /// Expect and consume a numeric literal, returning its value.
+    fn expect_number(&mut self) -> Option<i64> {
+        match self.peek().clone() {
+            TokenKind::Num(n) => {
+                self.advance();
+                Some(n)
+            }
+            other => {
+                let sp = self.peek_span();
+                self.error(format!("expected a number, found {:?}", other), sp);
+                None
+            }
         }
     }
 
@@ -446,6 +529,10 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => {
                 self.advance();
                 Some(Operand::Symbol(name))
+            }
+            TokenKind::Port(n) => {
+                self.advance();
+                Some(Operand::Port(n))
             }
             other => {
                 let sp = self.peek_span();
