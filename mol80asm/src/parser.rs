@@ -135,7 +135,106 @@ impl<'a> Parser<'a> {
         Some(Line { label, item, span: start_span })
     }
 
+    /// Rotate forms [CONFIRMED from scan], matched as exact token shapes:
+    ///   `A<*1:A` = RLC (7)          `A>*1:A` = RRC (15)
+    ///   `A,FC<*1:FC,A` = RAL (23)   `FC,A>*1:A,FC` = RAR (31)
+    fn try_rotate(&mut self) -> Option<Item> {
+        use TokenKind as T;
+        let a = || T::Reg(Reg::A);
+        let fc = || T::Flag(FlagKind::C);
+        let shapes: [(Vec<TokenKind>, u8, &'static str); 4] = [
+            (vec![a(), T::Lt, T::Star, T::Num(1), T::Colon, a()], 0x07, "RLC"),
+            (vec![a(), T::Gt, T::Star, T::Num(1), T::Colon, a()], 0x0F, "RRC"),
+            (
+                vec![a(), T::Comma, fc(), T::Lt, T::Star, T::Num(1), T::Colon, fc(), T::Comma, a()],
+                0x17,
+                "RAL",
+            ),
+            (
+                vec![fc(), T::Comma, a(), T::Gt, T::Star, T::Num(1), T::Colon, a(), T::Comma, fc()],
+                0x1F,
+                "RAR",
+            ),
+        ];
+        for (shape, op, asm) in shapes {
+            let end = self.pos + shape.len();
+            if end >= self.tokens.len() {
+                continue;
+            }
+            let matches = self.tokens[self.pos..end].iter().zip(&shape).all(|(t, k)| &t.kind == k);
+            let terminated = matches!(self.tokens[end].kind, T::Eol | T::Eof | T::RParen);
+            if matches && terminated {
+                self.pos = end;
+                return Some(Item::Fixed { bytes: vec![op], asm });
+            }
+        }
+        None
+    }
+
+    /// Parse `DEC(A):A` = DAA (39), decimal adjust A. [CONFIRMED from scan]
+    fn parse_dec(&mut self) -> Option<Item> {
+        let sp = self.peek_span();
+        self.advance(); // DEC
+        let ok = matches!(self.peek(), TokenKind::LParen) && {
+            self.advance();
+            matches!(self.peek(), TokenKind::Reg(Reg::A))
+        } && {
+            self.advance();
+            matches!(self.peek(), TokenKind::RParen)
+        } && {
+            self.advance();
+            matches!(self.peek(), TokenKind::Colon)
+        } && {
+            self.advance();
+            matches!(self.peek(), TokenKind::Reg(Reg::A))
+        };
+        if !ok {
+            self.error("only DEC(A):A (decimal adjust) is supported", sp);
+            return None;
+        }
+        self.advance();
+        Some(Item::Fixed { bytes: vec![0x27], asm: "DAA" })
+    }
+
+    /// `A+FC+x:A` (ADC/ACI) and `A-FC-x:A` (SBB/SBI).
+    fn try_carry_arith(&mut self) -> Option<Option<Item>> {
+        use TokenKind as T;
+        if self.pos + 4 >= self.tokens.len() {
+            return None;
+        }
+        let k = |i: usize| &self.tokens[self.pos + i].kind;
+        let subtract = match (k(0), k(1), k(2), k(3)) {
+            (T::Reg(Reg::A), T::Plus, T::Flag(FlagKind::C), T::Plus) => false,
+            (T::Reg(Reg::A), T::Minus, T::Flag(FlagKind::C), T::Minus) => true,
+            _ => return None,
+        };
+        let sp = self.peek_span();
+        self.pos += 4;
+        let rhs = match self.parse_operand() {
+            Some(r) => r,
+            None => return Some(None),
+        };
+        if self.expect_colon().is_none() {
+            return Some(None);
+        }
+        match self.parse_operand() {
+            Some(Operand::Reg(Reg::A)) => {}
+            Some(_) => {
+                self.error("carry arithmetic must target A (`A+FC+x:A` / `A-FC-x:A`)", sp);
+                return Some(None);
+            }
+            None => return Some(None),
+        }
+        Some(Some(Item::CarryAlu { subtract, rhs }))
+    }
+
     fn parse_item(&mut self) -> Option<Item> {
+        if let Some(item) = self.try_rotate() {
+            return Some(item);
+        }
+        if let Some(result) = self.try_carry_arith() {
+            return result;
+        }
         // '/' begins an unconditional jump, or special register-indirect/return forms.
         if matches!(self.peek(), TokenKind::Slash) {
             self.advance();
@@ -161,6 +260,21 @@ impl<'a> Parser<'a> {
             if name.eq_ignore_ascii_case("RTN") {
                 self.advance();
                 return Some(Item::Return);
+            }
+            // [CONFIRMED from scan] PAUSE = NOP (0), WAIT = HLT (118).
+            if name.eq_ignore_ascii_case("PAUSE") {
+                self.advance();
+                return Some(Item::Fixed { bytes: vec![0x00], asm: "NOP" });
+            }
+            if name.eq_ignore_ascii_case("WAIT") {
+                self.advance();
+                return Some(Item::Fixed { bytes: vec![0x76], asm: "HLT" });
+            }
+            if name.eq_ignore_ascii_case("NOT") {
+                return self.parse_not();
+            }
+            if name.eq_ignore_ascii_case("DEC") {
+                return self.parse_dec();
             }
             if name.eq_ignore_ascii_case("ORG")
                 || name.eq_ignore_ascii_case("DB")
@@ -192,7 +306,35 @@ impl<'a> Parser<'a> {
                 if matches!(self.peek(), TokenKind::Slash) {
                     return self.parse_exchange_tail(first, dst);
                 }
-                Some(make_move_or_stack(first, dst))
+                // Optional `<F>` annotation: the instruction destroys the flags.
+                let mut destroys_flags = false;
+                if matches!(self.peek(), TokenKind::Lt) {
+                    let sp = self.peek_span();
+                    self.advance();
+                    let ok = matches!(self.peek(), TokenKind::Ident(ref n) if n.eq_ignore_ascii_case("F"));
+                    if ok {
+                        self.advance();
+                    }
+                    if !ok || !matches!(self.peek(), TokenKind::Gt) {
+                        self.error("expected '<F>' annotation", sp);
+                        return None;
+                    }
+                    self.advance();
+                    destroys_flags = true;
+                }
+                let sp = self.peek_span();
+                match fixed_move(&first, &dst, destroys_flags) {
+                    Some(Ok(item)) => Some(item),
+                    Some(Err(msg)) => {
+                        self.error(msg, sp);
+                        None
+                    }
+                    None if destroys_flags => {
+                        self.error("'<F>' is not valid on this instruction", sp);
+                        None
+                    }
+                    None => Some(make_move_or_stack(first, dst)),
+                }
             }
             // Arithmetic. `*` (bare star) only appears in the 16-bit `HL*2:HL` (DAD H) form.
             TokenKind::Plus
@@ -208,6 +350,16 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let rhs = self.parse_operand()?;
                 self.expect_question()?;
+                // After `A=x?`: `/target` (jump if equal), `RTN` (return if equal), or a block.
+                if matches!(self.peek(), TokenKind::Slash) {
+                    self.advance();
+                    let target = self.parse_jump_target()?;
+                    return Some(Item::CompareJump { rhs, target });
+                }
+                if matches!(self.peek(), TokenKind::Ident(ref n) if n.eq_ignore_ascii_case("RTN")) {
+                    self.advance();
+                    return Some(Item::CompareReturn { rhs });
+                }
                 let cond = Condition::Compare { lhs: first, rhs };
                 self.parse_block_body(cond)
             }
@@ -377,6 +529,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse `NOT(x):x`. [CONFIRMED from scan] `NOT(A):A` = CMA (47), `NOT(FC):FC` = CMC (63).
+    fn parse_not(&mut self) -> Option<Item> {
+        let sp = self.peek_span();
+        self.advance(); // NOT
+        if !matches!(self.peek(), TokenKind::LParen) {
+            self.error("expected '(' after NOT", self.peek_span());
+            return None;
+        }
+        self.advance();
+        let inner = self.parse_operand()?;
+        if !matches!(self.peek(), TokenKind::RParen) {
+            self.error("expected ')' to close NOT(...)", self.peek_span());
+            return None;
+        }
+        self.advance();
+        self.expect_colon()?;
+        let dst = self.parse_operand()?;
+        match (&inner, &dst) {
+            (Operand::Reg(Reg::A), Operand::Reg(Reg::A)) => Some(Item::Fixed { bytes: vec![0x2F], asm: "CMA" }),
+            (Operand::Flag(FlagKind::C), Operand::Flag(FlagKind::C)) => {
+                Some(Item::Fixed { bytes: vec![0x3F], asm: "CMC" })
+            }
+            _ => {
+                self.error("only NOT(A):A and NOT(FC):FC are supported", sp);
+                None
+            }
+        }
+    }
+
     /// Parse `CALL(target)`.
     fn parse_call(&mut self) -> Option<Item> {
         self.advance(); // CALL
@@ -405,6 +586,11 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.advance(); // '='
+        if flag == FlagKind::I {
+            let sp = self.peek_span();
+            self.error("FI (interrupt enable) cannot be tested", sp);
+            return None;
+        }
         let value = match self.peek() {
             TokenKind::Num(n @ (0 | 1)) => {
                 let v = *n as u8;
@@ -431,6 +617,11 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), TokenKind::Ident(ref n) if n.eq_ignore_ascii_case("RTN")) {
             self.advance();
             Some(Item::CondReturn { flag, value })
+        } else if matches!(self.peek(), TokenKind::Ident(ref n) if n.eq_ignore_ascii_case("CALL")) {
+            match self.parse_call()? {
+                Item::Call { target } => Some(Item::CondCall { flag, value, target }),
+                _ => None,
+            }
         } else {
             let sp = self.peek_span();
             self.error("expected '/' (jump), 'RTN' (return), or '(' (block) after '?'", sp);
@@ -534,6 +725,14 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(Operand::Port(n))
             }
+            TokenKind::Var(n) => {
+                self.advance();
+                Some(Operand::Direct(n))
+            }
+            TokenKind::Flag(f) => {
+                self.advance();
+                Some(Operand::Flag(f))
+            }
             other => {
                 let sp = self.peek_span();
                 self.error(format!("expected an operand, found {:?}", other), sp);
@@ -565,6 +764,24 @@ fn is_pair(r: Reg) -> bool {
     matches!(r, Reg::BC | Reg::DE | Reg::HL | Reg::SP)
 }
 
+/// Moves that are really fixed opcodes [CONFIRMED from scan]. Returns None for ordinary moves.
+fn fixed_move(src: &Operand, dst: &Operand, destroys_flags: bool) -> Option<Result<Item, String>> {
+    let fixed = |b: u8, asm: &'static str| Some(Ok(Item::Fixed { bytes: vec![b], asm }));
+    match (src, dst) {
+        (Operand::Imm(1), Operand::Flag(FlagKind::I)) => fixed(0xFB, "EI"),
+        (Operand::Imm(0), Operand::Flag(FlagKind::I)) => fixed(0xF3, "DI"),
+        (Operand::Imm(1), Operand::Flag(FlagKind::C)) => fixed(0x37, "STC"),
+        (Operand::Imm(0), Operand::Flag(FlagKind::C)) if destroys_flags => fixed(0xB7, "ORA A"),
+        (Operand::Imm(0), Operand::Flag(FlagKind::C)) => Some(Err(
+            "clearing carry destroys the other flags; write `0:FC<F>`".to_string(),
+        )),
+        // `0:A` is XRA A (one byte; also sets the flags: Z=1, C=0).
+        (Operand::Imm(0), Operand::Reg(Reg::A)) => fixed(0xAF, "XRA A"),
+        (_, Operand::Flag(f)) => Some(Err(format!("unsupported assignment to flag {:?}", f))),
+        _ => None,
+    }
+}
+
 /// Turn a `src : dst` into a `Move`, or into a stack `Push`/`Pop` when one side is `(STK)`.
 ///
 /// `rp:(STK)` -> Push rp ; `(STK):rp` -> Pop rp. A `(STK):(STK)` is nonsensical and falls
@@ -572,10 +789,12 @@ fn is_pair(r: Reg) -> bool {
 fn make_move_or_stack(src: Operand, dst: Operand) -> Item {
     match (&src, &dst) {
         (Operand::Reg(rp), Operand::Reg(Reg::Stk)) if *rp != Reg::Stk => {
-            Item::Push { rp: *rp }
+            // `A:STK` is the MOL80 spelling of PUSH PSW (there is no `PSW` operand).
+            Item::Push { rp: if *rp == Reg::A { Reg::Psw } else { *rp } }
         }
         (Operand::Reg(Reg::Stk), Operand::Reg(rp)) if *rp != Reg::Stk => {
-            Item::Pop { rp: *rp }
+            // `STK:A` is the MOL80 spelling of POP PSW.
+            Item::Pop { rp: if *rp == Reg::A { Reg::Psw } else { *rp } }
         }
         _ => Item::Move { src, dst },
     }

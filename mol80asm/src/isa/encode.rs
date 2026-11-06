@@ -36,6 +36,20 @@ pub fn encode_move(src: &Operand, dst: &Operand) -> Result<Bytes, EncodeError> {
         (Operand::Port(_), _) | (_, Operand::Port(_)) => Err(EncodeError::Unsupported(
             "PORT(n) can only pair with A: `A:PORT(n)` (OUT) or `PORT(n):A` (IN)".to_string(),
         )),
+        // Direct memory (a VAR symbol): LDA 58 / STA 50 / LHLD 42 / SHLD 34 (decimal). [VERIFY]
+        (Operand::Direct(a), Operand::Reg(Reg::A)) => direct(0x3A, *a),
+        (Operand::Reg(Reg::A), Operand::Direct(a)) => direct(0x32, *a),
+        (Operand::Direct(a), Operand::Reg(Reg::HL)) => direct(0x2A, *a),
+        (Operand::Reg(Reg::HL), Operand::Direct(a)) => direct(0x22, *a),
+        (Operand::Direct(_), _) | (_, Operand::Direct(_)) => Err(EncodeError::Unsupported(
+            "a VAR symbol pairs only with A or HL (`s:A`, `A:s`, `s:HL`, `HL:s`)".to_string(),
+        )),
+        // `A:(BC)` -> STAX B (2), `A:(DE)` -> STAX D (18). [CONFIRMED from scan]
+        (Operand::Reg(Reg::A), Operand::Reg(Reg::AtBC)) => Ok(vec![0x02]),
+        (Operand::Reg(Reg::A), Operand::Reg(Reg::AtDE)) => Ok(vec![0x12]),
+        // `(BC):A` -> LDAX B (10), `(DE):A` -> LDAX D (26). [CONFIRMED from scan]
+        (Operand::Reg(Reg::AtBC), Operand::Reg(Reg::A)) => Ok(vec![0x0A]),
+        (Operand::Reg(Reg::AtDE), Operand::Reg(Reg::A)) => Ok(vec![0x1A]),
         // `HL:SP` -> SPHL (load SP from HL).
         (Operand::Reg(Reg::HL), Operand::Reg(Reg::SP)) => {
             Ok(vec![crate::isa::table::SPHL])
@@ -96,6 +110,27 @@ pub fn encode_alu(
 
     // Standard A-targeted ALU with a register/memory rhs.
     if let (Operand::Reg(Reg::A), Operand::Reg(r), Operand::Reg(Reg::A)) = (lhs, rhs, dst) {
+        // A op A forms with no (or a different) MOL80 spelling. [CONFIRMED]
+        if *r == Reg::A {
+            match op {
+                AluOp::And => {
+                    return Err(EncodeError::Unsupported(
+                        "`A+*A:A` (ANA A, opcode 167) is not a MOL80 instruction".to_string(),
+                    ))
+                }
+                AluOp::Or => {
+                    return Err(EncodeError::Unsupported(
+                        "`A-*A:A` is not MOL80; ORA A (opcode 183) is written `0:FC<F>`".to_string(),
+                    ))
+                }
+                AluOp::Xor => {
+                    return Err(EncodeError::Unsupported(
+                        "`A**A:A` is not MOL80; XRA A (opcode 175) is written `0:A`".to_string(),
+                    ))
+                }
+                _ => {}
+            }
+        }
         return find_opcode(Pattern::Alu { op, rhs: *r })
             .map(|o| vec![o])
             .ok_or_else(|| EncodeError::Unsupported(format!("ALU {:?} A,{:?}", op, r)));
@@ -168,6 +203,10 @@ pub fn encode_exchange(first: Reg, second: Reg) -> Result<Bytes, EncodeError> {
     // DE <-> HL: single XCHG.
     if pair(first, second, Reg::DE, Reg::HL) {
         return Ok(vec![XCHG]);
+    }
+    // STK <-> HL: XTHL (227), swap HL with the top of the stack. [CONFIRMED from scan]
+    if pair(first, second, Reg::Stk, Reg::HL) {
+        return Ok(vec![0xE3]);
     }
 
     // X <-> HL for X in {BC, DE}: push/copy/pop expansion.
@@ -243,4 +282,12 @@ fn fit_u16(n: i64) -> Result<(u8, u8), EncodeError> {
     } else {
         Err(EncodeError::ImmediateOutOfRange { value: n, bits: 16 })
     }
+}
+
+/// Encode a 3-byte direct-address instruction (opcode + little-endian address).
+fn direct(opcode: u8, addr: i64) -> Result<Bytes, EncodeError> {
+    if !(0..=0xFFFF).contains(&addr) {
+        return Err(EncodeError::Unsupported(format!("address {} out of range", addr)));
+    }
+    Ok(vec![opcode, (addr & 0xFF) as u8, (addr >> 8) as u8])
 }

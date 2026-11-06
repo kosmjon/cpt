@@ -257,6 +257,8 @@ pub const JMP: u8 = 0xC3;
 pub const CALL: u8 = 0xCD;
 /// Opcode for `RET` (0xC9). MOL80 `RTN` (or the rare synonym `/(STK)`).
 pub const RET: u8 = 0xC9;
+/// CPI n (compare A with immediate) = opcode 254. [CONFIRMED from scan]
+pub const CPI: u8 = 0xFE;
 /// Opcode for `PCHL` (0xE9) — jump to the address in HL. MOL80 `/HL`.
 pub const PCHL: u8 = 0xE9;
 /// Opcode for `XCHG` (0xEB) — exchange DE and HL. MOL80 `DE:HL/HL:DE`.
@@ -303,6 +305,13 @@ fn bare_mnemonic(opcode: u8) -> &'static str {
         Some((op, _)) => op,
         None => full,
     }
+}
+
+/// Map a flag test to its conditional-CALL opcode. Each Ccc is its Jcc + 2:
+/// CNZ=196, CZ=204, CNC=212, CC=220, CPO=228, CPE=236, CP=244, CM=252. [CONFIRMED from scan]
+pub fn cond_call(flag: FlagKind, value: u8) -> CondJumpInfo {
+    let opcode = cond_jump(flag, value).opcode + 2;
+    CondJumpInfo { opcode, i8080: bare_mnemonic(opcode) }
 }
 
 /// PUSH rp opcode: B=0xC5, D=0xD5, H=0xE5, PSW=0xF5. Returns None for unsupported operands.

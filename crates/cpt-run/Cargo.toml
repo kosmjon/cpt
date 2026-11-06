@@ -12,3 +12,7 @@ path = "src/main.rs"
 i8080-cpu = { path = "../i8080-cpu" }
 i8080-isa = { path = "../i8080-isa" }
 cpt-machine = { path = "../cpt-machine" }
+
+[dev-dependencies]
+# Used by tests/boot.rs to assemble the real cpm/*.mol sources.
+mol80asm = { path = "../../mol80asm" }

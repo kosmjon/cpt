@@ -24,7 +24,9 @@ fn push_pop_opcodes() {
     // BC -> C5/C1, DE -> D5/D1, PSW -> F5/F1
     assert_eq!(asm("          BC:STK\n"), vec![0xC5]);
     assert_eq!(asm("          STK:DE\n"), vec![0xD1]);
-    assert_eq!(asm("          PSW:STK\n"), vec![0xF5]);
+    // MOL80 spells PUSH/POP PSW as A:STK / STK:A (there is no PSW operand).
+    assert_eq!(asm("          A:STK\n"), vec![0xF5]);
+    assert_eq!(asm("          STK:A\n"), vec![0xF1]);
 }
 
 #[test]

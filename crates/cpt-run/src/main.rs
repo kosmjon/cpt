@@ -10,6 +10,9 @@
 //!   cpt-run --trace <file.bin>             Print a disassembled trace, one line per step.
 //!   cpt-run --load 0x0100 <file.bin>       Load (and start) at a given address.
 //!   cpt-run --steps 5000 <file.bin>        Cap the number of instructions.
+//!   cpt-run --serial-listen 127.0.0.1:2323 <file.bin>
+//!                                          Serial port as a Telnet server (the guest echoes;
+//!                                          add --serial-raw for a plain TCP byte pipe).
 //!
 //! Options may be combined; the file is the last argument.
 
@@ -36,6 +39,11 @@ struct Options {
     load_addr: u16,
     max_steps: u64,
     serial: SerialMode,
+    /// With `--serial-listen`: skip Telnet negotiation/filtering (for raw TCP clients).
+    serial_raw: bool,
+    /// Disk image mounted in drive 1 / drive 2 (file-backed; writes persist on exit/flush).
+    disk1: Option<String>,
+    disk2: Option<String>,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -49,7 +57,11 @@ fn parse_args() -> Result<Options, String> {
         load_addr: 0x0000,
         max_steps: 1_000_000,
         serial: SerialMode::None,
+        serial_raw: false,
+        disk1: None,
+        disk2: None,
     };
+    let mut steps_set = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -65,6 +77,7 @@ fn parse_args() -> Result<Options, String> {
                     args.get(i).ok_or("--serial-listen needs an address")?.clone(),
                 );
             }
+            "--serial-raw" => opts.serial_raw = true,
             "--serial-connect" => {
                 i += 1;
                 opts.serial = SerialMode::Connect(
@@ -91,6 +104,15 @@ fn parse_args() -> Result<Options, String> {
                     .ok_or("--steps needs a number")?
                     .parse()
                     .map_err(|_| "invalid --steps value")?;
+                steps_set = true;
+            }
+            "--disk1" => {
+                i += 1;
+                opts.disk1 = Some(args.get(i).ok_or("--disk1 needs a disk image file")?.clone());
+            }
+            "--disk2" => {
+                i += 1;
+                opts.disk2 = Some(args.get(i).ok_or("--disk2 needs a disk image file")?.clone());
             }
             other if other.starts_with("--") => return Err(format!("unknown option {}", other)),
             _ => opts.file = args[i].clone(),
@@ -99,6 +121,11 @@ fn parse_args() -> Result<Options, String> {
     }
     if opts.file.is_empty() && !opts.demo && !opts.serial_demo {
         return Err("no input file given".into());
+    }
+    // An interactive serial session should run until the peer disconnects or the user hits
+    // Ctrl+C, so don't apply the 1M-step cap unless --steps was given explicitly.
+    if !steps_set && !matches!(opts.serial, SerialMode::None) {
+        opts.max_steps = u64::MAX;
     }
     Ok(opts)
 }
@@ -120,7 +147,8 @@ fn main() -> ExitCode {
             eprintln!("error: {}", e);
             eprintln!(
                 "usage: cpt-run [--trace] [--load <addr>] [--steps <n>] \
-                 [--serial-listen <addr>|--serial-connect <addr>] <file.bin>"
+                 [--serial-listen <addr> [--serial-raw]|--serial-connect <addr>] \
+                 [--disk1 <image>] [--disk2 <image>] <file.bin>"
             );
             return ExitCode::from(2);
         }
@@ -152,11 +180,41 @@ fn main() -> ExitCode {
         ));
     }
 
+    // Disk drives: if either image was given, attach the controller and mount the images
+    // (drive 1 = station A, drive 2 = station B). Images are file-backed, so writes the guest
+    // flushes (or that are pending at a clean exit) persist to the host file.
+    let mut disk_dev: Option<usize> = None;
+    if opts.disk1.is_some() || opts.disk2.is_some() {
+        let geom = cpt_machine::Geometry::default();
+        let mut ctrl = cpt_machine::DiskController::new(cfg.disk_base_port, geom);
+        let drives = [
+            (cpt_machine::Station::A, "disk1", &opts.disk1),
+            (cpt_machine::Station::B, "disk2", &opts.disk2),
+        ];
+        for (station, label, path) in drives {
+            let Some(path) = path else { continue };
+            // open_file would silently create a new blank image on a typo'd path; refuse.
+            if !std::path::Path::new(path).exists() {
+                eprintln!("error: --{} image '{}' does not exist", label, path);
+                return ExitCode::FAILURE;
+            }
+            match cpt_machine::DiskImage::open_file(path, geom) {
+                Ok(img) => ctrl.mount(station, img),
+                Err(e) => {
+                    eprintln!("error: cannot open --{} image '{}': {}", label, path, e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        disk_dev = Some(machine.device_count());
+        machine.attach_device(Box::new(ctrl));
+    }
+
     // Serial port: attach the device and open a TCP transport if requested.
     let mut serial: Option<(usize, Box<dyn Transport>)> = None;
     let transport: Option<Box<dyn Transport>> = match &opts.serial {
         SerialMode::None => None,
-        SerialMode::Listen(addr) => match tcp_serial::TcpTransport::listen(addr) {
+        SerialMode::Listen(addr) => match tcp_serial::TcpTransport::listen_with(addr, !opts.serial_raw) {
             Ok(t) => Some(Box::new(t)),
             Err(e) => {
                 eprintln!("error: serial listen on {} failed: {}", addr, e);
@@ -225,6 +283,18 @@ fn main() -> ExitCode {
                     cpt_machine::serial_pump(s, transport.as_mut());
                 }
             }
+        }
+    }
+
+    // Eject (and thereby flush) any mounted disks so pending writes reach the image files.
+    if let Some(dev) = disk_dev {
+        if let Some(c) = exec
+            .machine
+            .device_mut(dev)
+            .and_then(|d| d.as_any_mut().downcast_mut::<cpt_machine::DiskController>())
+        {
+            let _ = c.eject(cpt_machine::Station::A);
+            let _ = c.eject(cpt_machine::Station::B);
         }
     }
 

@@ -1,0 +1,60 @@
+* ===========================================================================
+*  CP/M-over-serial, increment 3: BOOT ROM (the "hardware boot").
+*
+*  Models what the drive/controller did when a disk was present and no operating
+*  system was running (see .kiro/specs/cpt8000-emulator/boot-sequence.md): read the
+*  boot sector, and if the disk is usable, load it and run it.  If there is no disk
+*  (or the read fails) keep retrying, as the hardware did, so a disk inserted later
+*  gets booted.
+*
+*  Runs from reset at 0000H.  Reads block 0 of drive 1 into memory at 0100H and
+*  jumps to it.  Must stay below 0100H in size.
+*
+*  Disk controller ports (placeholder protocol; [VERIFY] vs. real hardware):
+*     80  STATION   out: 0 = drive 1, 1 = drive 2
+*     81  BLOCK_LO  out: low byte of the block number
+*     82  BLOCK_HI  out: high byte of the block number
+*     83  COMMAND   out: 1 = read      /  STATUS in: bit 0 = OK, bit 7 = no media
+*     84  DATA      in : next byte of the block just read
+*
+*  Block number = track*26 + (sector-1) on the 77x26x128 geometry; the boot
+*  sector is block 0.  [VERIFY] which track/sector the real hardware read.
+* ===========================================================================
+DSKSTN    EQU 80
+DSKLO     EQU DSKSTN+1
+DSKHI     EQU DSKSTN+2
+DSKCMD    EQU DSKSTN+3
+DSKDATA   EQU DSKSTN+4
+CMDREAD   EQU 1
+DSKOK     EQU 1
+*
+          ORG 0
+*
+*  A stack, high in bank 0, in case the boot sector wants to CALL.
+BOOT      32512:HL
+          HL:SP
+*
+*  Ask drive 1 for block 0.
+RETRY     0:A
+          A:PORT(DSKSTN)
+          A:PORT(DSKLO)
+          A:PORT(DSKHI)
+          CMDREAD:A
+          A:PORT(DSKCMD)
+*
+*  Status bit 0 clear means no media / failed read: try again.
+          PORT(DSKCMD):A
+          A+*DSKOK:A
+          FZ=1? /RETRY
+*
+*  Stream the 128 bytes of the block to 0100H.
+          256:HL
+          128:B
+RDLOOP    PORT(DSKDATA):A
+          A:(HL)
+          HL+1:HL
+          B-1:B
+          FZ=0? /RDLOOP
+*
+*  Hand over to the boot sector.
+          /256

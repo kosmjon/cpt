@@ -20,7 +20,8 @@ Status tags used in the specs:
 - [ ] 3. Radix markers for binary and hex literals.
 - [ ] 4. Data-definition directives (byte / word / string / reserve-storage) syntax — we use
       placeholder `DB`/`DW`/`DS` for now; confirm the real MOL80 spellings.
-- [ ] 5. Assembler directives: `ORG`, EQU, any others — we use a placeholder `ORG`; confirm the
+- [ ] 5. Assembler directives: `ORG`, EQU, any others — we use placeholder `ORG` and `NAME EQU expr`
+      (implemented in the lexer; absolute constants, `+`/`-` only); confirm the
       real spelling and whether EQU/others exist.
       (Note: I/O via `A:PORT(n)`/`PORT(n):A` is CONFIRMED from the scan, not a placeholder.)
 - [ ] 6. Inline-comment start column (currently disabled; `*` full-line comments are CONFIRMED

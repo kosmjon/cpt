@@ -57,6 +57,13 @@ pub enum Item {
     Return,
     /// A conditional return on a PSW flag: `Fx=0? RTN` / `Fx=1? RTN`.
     CondReturn { flag: FlagKind, value: u8 },
+    /// A conditional call on a PSW flag: `Fx=v? CALL(s)` (CNZ/CZ/.../CM). [CONFIRMED from scan]
+    CondCall { flag: FlagKind, value: u8, target: JumpTarget },
+    /// `A=x? /target`: compare A with a register (CMP r) or an immediate (CPI n, opcode 254),
+    /// then jump if equal.
+    CompareJump { rhs: Operand, target: JumpTarget },
+    /// `A=x? RTN`: compare A with a register or immediate, then return if equal.
+    CompareReturn { rhs: Operand },
     /// Push a register pair onto the stack: `rp:STK`.
     Push { rp: Reg },
     /// Pop a register pair from the stack: `STK:rp`.
@@ -86,6 +93,16 @@ pub enum Item {
     DefineWords { values: Vec<u16> },
     /// `DS count` — reserve `count` zero bytes.
     DefineSpace { count: u16 },
+
+    /// A form that maps to fixed bytes, recognized by the parser. [CONFIRMED from scan]:
+    ///   `1:FI` = EI (251), `0:FI` = DI (243), `0:FC<F>` = ORA A (183, clears carry and
+    ///   sets the other flags from A), `0:A` = XRA A (175, zeroes A and sets flags).
+    Fixed { bytes: Vec<u8>, asm: &'static str },
+
+    /// Add/subtract with carry into A. [CONFIRMED from scan] `A+FC+r:A` = ADC r (136..143),
+    /// `A+FC+n:A` = ACI n (206), `A-FC-n:A` = SBI n (222); `A-FC-r:A` = SBB r (152..159) by
+    /// symmetry [VERIFY].
+    CarryAlu { subtract: bool, rhs: Operand },
 }
 
 /// An item in a `DB` directive: a single byte value or a string (each char becomes a byte).
@@ -106,6 +123,11 @@ pub enum Operand {
     Symbol(String),
     /// An I/O port: `PORT(n)`. `A:PORT(n)` = OUT n, `PORT(n):A` = IN n. [CONFIRMED from scan]
     Port(u8),
+    /// A flag as a destination, e.g. `FI` in `1:FI` or `FC` in `0:FC<F>`.
+    Flag(FlagKind),
+    /// A direct memory address (a `VAR` symbol): `s:A`=LDA, `A:s`=STA, `s:HL`=LHLD, `HL:s`=SHLD.
+    /// [VERIFY] spelling; opcodes 58/50/42/34 decimal.
+    Direct(i64),
 }
 
 /// Target of a jump: an address, a label, or (future) an expression.

@@ -12,6 +12,12 @@
 *  Full-line comments begin with '*' (our-convention placeholder). Code lines
 *  are kept free of inline comments to avoid column counting.
 * ===========================================================================
+*  Port and bit constants (EQU; no INCLUDE yet, so each file repeats what it uses).
+SERDATA   EQU 112
+SERSTAT   EQU SERDATA+1
+RXRDY     EQU 1
+TXRDY     EQU 2
+*
           ORG 0
 *
 *  Entry: set up a stack, print the sign-on, then echo forever.
@@ -25,19 +31,19 @@ ECHO      CALL(CONIN)
 *
 *  CONOUT: send the byte in A out the serial port (wait for TX ready).
 *  Stash A on the stack across the status poll (the poll clobbers A).
-CONOUT    PSW:STK
-COWAIT    PORT(113):A
-          A+*2:A
+CONOUT    A:STK
+COWAIT    PORT(SERSTAT):A
+          A+*TXRDY:A
           FZ=1? /COWAIT
-          STK:PSW
-          A:PORT(112)
+          STK:A
+          A:PORT(SERDATA)
           RTN
 *
 *  CONIN: wait for a received byte, return it in A.
-CONIN     PORT(113):A
-          A+*1:A
+CONIN     PORT(SERSTAT):A
+          A+*RXRDY:A
           FZ=1? /CONIN
-          PORT(112):A
+          PORT(SERDATA):A
           RTN
 *
 *  PRINT: send the NUL-terminated string at HL.

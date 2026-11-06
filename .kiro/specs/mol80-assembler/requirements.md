@@ -43,9 +43,39 @@ which will execute the code this tool produces.
 - **I/O ports:** `A:PORT(n)` = OUT n (opcode 211 = 0xD3), `PORT(n):A` = IN n (opcode 219 =
   0xDB) — consistent with the `src:dst` rule (A written to / read from port n).
   **[CONFIRMED from scan]**
+- **Interrupt flag and flag-clobbering forms [CONFIRMED from scan]:** `1:FI` = EI (251),
+  `0:FI` = DI (243) (`FI` = flag interrupt; assign-only, never tested); `0:FC<F>` = ORA A (183),
+  clearing carry with `<F>` marking that the other flags are destroyed; `0:A` = XRA A (175),
+  so `0:A` sets the flags (Z=1, C=0) rather than being MVI A,0. Other `n:A` remain MVI.
+  `1:FC` = STC (55), `NOT(FC):FC` = CMC (63), `NOT(A):A` = CMA (47), `PAUSE` = NOP (0),
+  `WAIT` = HLT (118). `A:(BC)` = STAX B (2), `A:(DE)` = STAX D (18) — `(BC)`/`(DE)` are
+  memory operands, distinct from the pairs `BC`/`DE`. `STK:HL/HL:STK` = XTHL (227).
+  `CALL(0)`..`CALL(7)` = RST 0..7 (199..255 step 8), so `CALL(n)` with n < 8 (literal or EQU)
+  is a one-byte restart to address 8n, not a call to address n. **[CONFIRMED from scan]**
+  `(BC):A` = LDAX B (10), `(DE):A` = LDAX D (26). Rotates: `A<*1:A` = RLC (7), `A>*1:A` =
+  RRC (15), `A,FC<*1:FC,A` = RAL (23), `FC,A>*1:A,FC` = RAR (31) — matched as exact token
+  shapes (`<*`/`>*` = rotate left/right by 1). `DEC(A):A` = DAA (39). **[CONFIRMED from scan]**
+  Carry arithmetic: `A+FC+r:A` = ADC r (136..143), `A+FC+n:A` = ACI n (206), `A-FC-n:A` = SBI n
+  (222) **[CONFIRMED from scan]**; `A-FC-r:A` = SBB r (152..159) by symmetry **[VERIFY]**.
+  Conditional calls: `Fx=v? CALL(s)` = CNZ 196, CZ 204, CNC 212, CC 220, CPO 228, CPE 236,
+  CP 244, CM 252 **[CONFIRMED from scan]**. Compares (CMP r 184..191, CPI 254) exist only as
+  part of `A=x?` conditions (`A=x? ( ... )`, `A=x? /label`, `A=x? RTN`); there is no
+  standalone compare form, by design **[CONFIRMED]**.
+- **Opcodes never used in MOL80 [CONFIRMED]:** 143 (ADC A), 159 (SBB A) and 167 (ANA A) have
+  no MOL80 spelling; `A+FC+A:A`, `A-FC-A:A` and `A+*A:A` are rejected. ORA A (183) and
+  XRA A (175) exist only as `0:FC<F>` and `0:A`; `A-*A:A` and `A**A:A` are rejected. 8, 16, 32, 40, 48, 56,
+  203, 217, 237 and 253 are the 8080's undocumented opcodes (duplicate NOPs, 8085 RIM/SIM-like
+  slots, and duplicate JMP/RET/CALL) and are never emitted. `tests/never_emitted.rs` checks
+  every supported form against this list.
 - **Assembler directives (our-convention placeholders; real MOL80 directive syntax is
   [VERIFY]):** `ORG addr` sets the location counter (forward ORG zero-fills; backward is an
-  error); `DB item,...` defines bytes (numbers and `"strings"`); `DW value,...` defines
+  error); `NAME EQU expr` defines an absolute named constant (name in the label field; `expr` is
+  numbers and earlier equates joined by `+`/`-`; usable anywhere a number is, including
+  `PORT(...)`, before or after its definition; never relocated; emits no bytes — EQU spelling
+  and semantics are **[VERIFY]**); `NAME VAR addr` names a memory variable: `NAME:A` = LDA
+  (58), `A:NAME` = STA (50), `NAME:HL` = LHLD (42), `HL:NAME` = SHLD (34) — a `VAR` symbol means
+  "memory at this address" where an `EQU` symbol means "this value" (`K:A` = MVI, `K:HL` = LXI);
+  the VAR spelling is **[VERIFY]**; `DB item,...` defines bytes (numbers and `"strings"`); `DW value,...` defines
   little-endian words; `DS count` reserves zero bytes. These let us write real programs (e.g.
   the CP/M BIOS) now; spellings adjust when the manual confirms MOL80's directive syntax.
 

@@ -51,3 +51,46 @@ fn tcp_transport_round_trip() {
     let got = handle.join().unwrap();
     assert_eq!(got, b"OK", "emulator should receive the peer's bytes");
 }
+
+#[test]
+fn telnet_listen_negotiates_and_filters() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let handle = thread::spawn(move || {
+        let mut t = tcp_serial::TcpTransport::listen_with(&format!("127.0.0.1:{}", port), true).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..100 {
+            got.extend(t.recv());
+            if got.len() >= 4 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        got
+    });
+
+    thread::sleep(Duration::from_millis(100));
+    let mut peer = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut buf = [0u8; 6];
+    peer.read_exact(&mut buf).unwrap();
+    // IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD.
+    assert_eq!(buf, [255, 251, 1, 255, 251, 3]);
+
+    // Client replies with DO ECHO / DO SGA, a terminal-type subnegotiation, then "dir\r\0".
+    let mut msg = vec![255, 253, 1, 255, 253, 3, 255, 250, 24, 0, b'V', b'T', 255, 240];
+    msg.extend_from_slice(b"dir\r");
+    peer.write_all(&msg).unwrap();
+    peer.flush().unwrap();
+
+    assert_eq!(handle.join().unwrap(), b"dir\r", "only the data bytes should reach the guest");
+}
+
+#[test]
+fn telnet_filter_unescapes_iac() {
+    let mut f = tcp_serial::TelnetFilter::default();
+    let out: Vec<u8> = [b'a', 255, 255, b'b', 255, 241, b'c'].iter().filter_map(|&b| f.feed(b)).collect();
+    assert_eq!(out, vec![b'a', 255, b'b', b'c']);
+}

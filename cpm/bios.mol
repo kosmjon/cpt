@@ -1,0 +1,309 @@
+* ===========================================================================
+*  CP/M 2.2 BIOS for the CPT emulator, written in MOL80 (CP/M-over-serial, increment 4).
+*
+*  The CCP and BDOS are stock Digital Research CP/M 2.2 (cpm/vendor, built by
+*  cpm/tools/asm80.py with origin 0E400H).  This file is the only machine-specific part:
+*     console -> the serial port (VT100 terminal on the other end)
+*     disks   -> the placeholder disk controller (cpm/boot.mol documents its protocol)
+*
+*  Memory map (64K):   CCP  0E400H   BDOS  0EC00H (entry 0EC06H)   BIOS  0FA00H
+*
+*  Disk: 77 tracks x 26 sectors x 128 bytes (IBM 3740), 2 system tracks, 1K blocks,
+*  64 directory entries, no sector skew.  Drive A: = drive 1, B: = drive 2.
+*  The controller addresses linear blocks:  block = track*26 + sector.
+*
+*  Conventions: sector translation is the identity, so SEC is 0-based (0..25).
+*  Variables are `VAR` symbols (direct memory: s:A = LDA, A:s = STA, s:HL = LHLD,
+*  HL:s = SHLD).  Constants are `EQU`.  Both spellings are our-convention [VERIFY].
+* ===========================================================================
+*  Serial console
+SERDATA   EQU 112
+SERSTAT   EQU SERDATA+1
+RXRDY     EQU 1
+TXRDY     EQU 2
+*  Disk controller
+DSKSTN    EQU 80
+DSKLO     EQU DSKSTN+1
+DSKHI     EQU DSKSTN+2
+DSKCMD    EQU DSKSTN+3
+DSKDATA   EQU DSKSTN+4
+CMDREAD   EQU 1
+CMDWRITE  EQU 2
+CMDFLUSH  EQU 3
+DSKOK     EQU 1
+*  CP/M layout
+CCPBASE   EQU 0E400H
+BDOSENT   EQU 0EC06H
+SPT       EQU 26
+*  Data structures (placed after the code; see the ORG below)
+DPH0      EQU 0FC00H
+DPH1      EQU DPH0+16
+DPBADR    EQU DPH0+32
+DIRBUF    EQU DPH0+48
+CSV0      EQU DPH0+176
+CSV1      EQU CSV0+16
+ALV0      EQU CSV1+16
+ALV1      EQU ALV0+32
+*  Page-zero hooks and BIOS variables
+IOBYTE    VAR 3
+CDISK     VAR 4
+W0JMP     VAR 0
+W0ADR     VAR 1
+W5JMP     VAR 5
+W6ADR     VAR 6
+DSK       VAR 0FD40H
+TRK       VAR DSK+1
+SEC       VAR DSK+2
+DMA       VAR DSK+3
+KEYFLG    VAR DSK+5
+KEYCH     VAR DSK+6
+*
+          ORG 0FA00H
+*  The 17-entry jump table CP/M requires.  SECTRAN must land at BIOS+30H.
+          /COLD
+          /WARM
+          /CONST
+          /CONIN
+          /CONOUT
+          /LIST
+          /PUNCH
+          /READER
+          /HOME
+          /SELDSK
+          /SETTRK
+          /SETSEC
+          /SETDMA
+          /READ
+          /WRITE
+          /LISTST
+          /SECTRAN
+*
+*  Cold boot: the loader (boot sector) jumps here after loading CP/M.
+COLD      256:HL
+          HL:SP
+          MSG:HL
+          CALL(PRINT)
+          0:A
+          A:IOBYTE
+          A:CDISK
+          A:DSK
+          A:KEYFLG
+          /GOCPM
+*
+*  Warm boot: reload the CCP and BDOS (blocks 1..44) from drive 1, then restart the CCP.
+WARM      256:HL
+          HL:SP
+          CCPBASE:HL
+          1:C
+WLOOP     C:E
+          0:D
+          0:A
+          CALL(GETBLK)
+          0:FC<F>
+          FZ=0? /WERR
+          C+1:C
+          C:A
+          A=45? /GOCPM
+          /WLOOP
+WERR      ERRMSG:HL
+          CALL(PRINT)
+SPIN      /SPIN
+*
+*  Set up page zero (warm-boot and BDOS jumps), the default DMA address, and enter the CCP
+*  with C = current disk.
+GOCPM     195:A
+          A:W0JMP
+          WARM:HL
+          HL:W0ADR
+          A:W5JMP
+          BDOSENT:HL
+          HL:W6ADR
+          128:HL
+          HL:DMA
+          CDISK:A
+          A:C
+          /CCPBASE
+*
+*  ---- console -------------------------------------------------------------
+*  CONST: A = 0FFH if a character is waiting, else 0.
+*  A Telnet terminal sends CR LF (or CR NUL) for Enter.  CP/M wants just CR, and a stray LF
+*  would end a second (empty) command line, so LF and NUL from the terminal are dropped
+*  here.  A character that is accepted is held in KEYCH until CONIN takes it, because the
+*  BDOS polls CONST during output and then expects CONIN not to block.
+CONST     KEYFLG:A
+          0:FC<F>
+          FZ=0? /CNYES
+          PORT(SERSTAT):A
+          A+*RXRDY:A
+          FZ=1? RTN
+          PORT(SERDATA):A
+          A+*127:A
+          A=10? /CNNO
+          A=0? /CNNO
+          A:KEYCH
+          1:A
+          A:KEYFLG
+CNYES     255:A
+          RTN
+CNNO      0:A
+          RTN
+*
+*  CONIN: wait for a character; return it in A (7 bits).
+CONIN     CALL(CONST)
+          0:FC<F>
+          FZ=1? /CONIN
+          0:A
+          A:KEYFLG
+          KEYCH:A
+          RTN
+*
+*  CONOUT: send the character in C.
+CONOUT    PORT(SERSTAT):A
+          A+*TXRDY:A
+          FZ=1? /CONOUT
+          C:A
+          A:PORT(SERDATA)
+          RTN
+*
+*  PRINT: send the NUL-terminated string at HL (uses CONOUT).
+PRINT     (HL):A
+          0:FC<F>
+          FZ=1? RTN
+          A:C
+          CALL(CONOUT)
+          HL+1:HL
+          /PRINT
+*
+*  ---- list / punch / reader: no devices ------------------------------------
+LIST      RTN
+PUNCH     RTN
+READER    26:A
+          RTN
+LISTST    255:A
+          RTN
+*
+*  ---- disks ---------------------------------------------------------------
+HOME      0:A
+          A:TRK
+          RTN
+SETTRK    C:A
+          A:TRK
+          RTN
+SETSEC    C:A
+          A:SEC
+          RTN
+SETDMA    B:H
+          C:L
+          HL:DMA
+          RTN
+*
+*  SELDSK: C = drive.  Return HL = disk parameter header, or 0 if there is no such drive.
+SELDSK    C:A
+          A=0? /SEL0
+          A=1? /SEL1
+          0:HL
+          RTN
+SEL0      A:DSK
+          DPH0:HL
+          RTN
+SEL1      A:DSK
+          DPH1:HL
+          RTN
+*
+*  SECTRAN: no skew, so the physical sector is the logical sector (BC -> HL).
+SECTRAN   B:H
+          C:L
+          RTN
+*
+*  READ / WRITE: transfer the current track/sector between the disk and the DMA address.
+*  Return A = 0 if OK, 1 on error.
+READ      CALL(CALCBLK)
+          DMA:HL
+          /GETBLK
+WRITE     CALL(CALCBLK)
+          DMA:HL
+          /PUTBLK
+*
+*  CALCBLK: DE = TRK*26 + SEC;  A = current drive (station).
+*  SEC is 0-based: with no translate table the BDOS passes its logical sector (0..25)
+*  through SECTRAN unchanged.
+CALCBLK   TRK:A
+          A:B
+          0:HL
+          SPT:DE
+CBLOOP    B:A
+          0:FC<F>
+          FZ=1? /CBDONE
+          HL+DE:HL
+          B-1:B
+          /CBLOOP
+CBDONE    SEC:A
+          A:E
+          0:D
+          HL+DE:HL
+          DE:HL/HL:DE
+          DSK:A
+          RTN
+*
+*  GETBLK: read block DE of station A into memory at HL (HL advances by 128).
+*  Returns A = 0 if OK, 1 on error.  Preserves C.
+GETBLK    A:PORT(DSKSTN)
+          E:A
+          A:PORT(DSKLO)
+          D:A
+          A:PORT(DSKHI)
+          CMDREAD:A
+          A:PORT(DSKCMD)
+          PORT(DSKCMD):A
+          A+*DSKOK:A
+          FZ=1? /GBERR
+          128:B
+GBLOOP    PORT(DSKDATA):A
+          A:(HL)
+          HL+1:HL
+          B-1:B
+          FZ=0? /GBLOOP
+          0:A
+          RTN
+GBERR     1:A
+          RTN
+*
+*  PUTBLK: write the 128 bytes at HL to block DE of station A, then flush to the image.
+PUTBLK    A:PORT(DSKSTN)
+          E:A
+          A:PORT(DSKLO)
+          D:A
+          A:PORT(DSKHI)
+          CMDWRITE:A
+          A:PORT(DSKCMD)
+          PORT(DSKCMD):A
+          A+*DSKOK:A
+          FZ=1? /PBERR
+          128:B
+PBLOOP    (HL):A
+          A:PORT(DSKDATA)
+          HL+1:HL
+          B-1:B
+          FZ=0? /PBLOOP
+          CMDFLUSH:A
+          A:PORT(DSKCMD)
+          0:A
+          RTN
+PBERR     1:A
+          RTN
+*
+MSG       DB 13, 10, "CP/M 2.2 on CPT (MOL80 BIOS)", 13, 10, 0
+ERRMSG    DB 13, 10, "BOOT ERROR", 13, 10, 0
+*
+*  ---- CP/M data structures (fixed addresses so DW can use equates) ---------
+          ORG 0FC00H
+*  DPH0 / DPH1: XLT (none), 3 scratch words, DIRBUF, DPB, CSV, ALV
+          DW 0, 0, 0, 0, DIRBUF, DPBADR, CSV0, ALV0
+          DW 0, 0, 0, 0, DIRBUF, DPBADR, CSV1, ALV1
+*  DPB: 26 sectors/track, 1K blocks (BSH 3, BLM 7), EXM 0, 243 blocks, 64 dir entries,
+*  AL0 = 0C0H (two directory blocks), check vector 16, 2 reserved (system) tracks.
+          DW SPT
+          DB 3, 7, 0
+          DW 242, 63
+          DB 0C0H, 0
+          DW 16, 2

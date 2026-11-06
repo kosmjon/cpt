@@ -1,0 +1,61 @@
+* ===========================================================================
+*  CP/M-over-serial, increment 4: BOOT SECTOR LOADER (block 0 of a CP/M system disk).
+*
+*  The boot ROM (cpm/boot.mol) reads this block to 0100H and jumps here.  The loader reads
+*  the CP/M system image (blocks 1..49: CCP + BDOS + BIOS) from drive 1 into memory at
+*  0E400H and starts the BIOS cold boot at 0FA00H.  Must fit in one 128-byte block.
+*
+*  Blocks 1..44 are the CCP+BDOS (0E400H-0F9FFH); blocks 45..49 are the BIOS (0FA00H on).
+* ===========================================================================
+SERDATA   EQU 112
+DSKSTN    EQU 80
+DSKLO     EQU DSKSTN+1
+DSKHI     EQU DSKSTN+2
+DSKCMD    EQU DSKSTN+3
+DSKDATA   EQU DSKSTN+4
+CMDREAD   EQU 1
+DSKOK     EQU 1
+CCPBASE   EQU 0E400H
+BIOSBASE  EQU 0FA00H
+LASTP1    EQU 50
+*
+          ORG 256
+LOADER    CCPBASE:HL
+          1:C
+LLOOP     C:E
+          0:D
+          0:A
+          CALL(GETBLK)
+          0:FC<F>
+          FZ=0? /LERR
+          C+1:C
+          C:A
+          A=LASTP1? /BIOSBASE
+          /LLOOP
+*
+*  Load failed: send '?' and stop.
+LERR      63:A
+          A:PORT(SERDATA)
+LSPIN     /LSPIN
+*
+*  GETBLK: read block DE of station A to (HL), advancing HL.  A = 0 if OK, else 1.
+GETBLK    A:PORT(DSKSTN)
+          E:A
+          A:PORT(DSKLO)
+          D:A
+          A:PORT(DSKHI)
+          CMDREAD:A
+          A:PORT(DSKCMD)
+          PORT(DSKCMD):A
+          A+*DSKOK:A
+          FZ=1? /GBERR
+          128:B
+GBLOOP    PORT(DSKDATA):A
+          A:(HL)
+          HL+1:HL
+          B-1:B
+          FZ=0? /GBLOOP
+          0:A
+          RTN
+GBERR     1:A
+          RTN

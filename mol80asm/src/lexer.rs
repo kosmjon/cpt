@@ -14,9 +14,13 @@
 //! behind a single constant/function so a confirmed value is a one-line change:
 //!   * `COMMENT_COL`  — where the inline comment field begins. [VERIFY ~40]
 //!   * `parse_number` — radix markers for hex/binary/decimal. [VERIFY]
+//!   * `NAME EQU expr` — named absolute constants (our-convention placeholder). [VERIFY]
+//!     The name is in the label field; `expr` is numbers/earlier equates joined by `+`/`-`.
+//!     Resolved here in a pre-pass: uses become numeric tokens, including inside `PORT(...)`.
 
 use crate::diag::Diagnostics;
 use crate::token::{FlagKind, Reg, Span, Token, TokenKind};
+use std::collections::HashMap;
 
 /// Width of the leading label field (columns 1..=LABEL_WIDTH). A non-blank first column
 /// marks a label. [CONFIRMED: labels live in the first ~10 chars, no trailing colon.]
@@ -33,16 +37,26 @@ pub const COMMENT_COL: usize = 1_000;
 
 pub struct Lexer<'a> {
     diags: &'a mut Diagnostics,
+    /// Named constants from `NAME EQU value` lines, collected in a pre-pass so a constant can be
+    /// used anywhere in the file (before or after its definition). Uses are replaced by their
+    /// value as numeric tokens, so they behave exactly like literals (absolute, never
+    /// relocated). EQU syntax is our-convention [VERIFY]; see the module notes.
+    /// `(value, is_var)`: `NAME EQU v` is a constant (immediate); `NAME VAR a` names a memory
+    /// address, so `NAME:A` / `A:NAME` / `NAME:HL` / `HL:NAME` are direct loads/stores.
+    equates: HashMap<String, (i64, bool)>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(diags: &'a mut Diagnostics) -> Self {
-        Lexer { diags }
+        Lexer { diags, equates: HashMap::new() }
     }
 
     /// Tokenize an entire source string into a flat token stream (lines separated by `Eol`,
     /// terminated by `Eof`).
     pub fn tokenize(&mut self, src: &str) -> Vec<Token> {
+        // Pre-pass: gather every `NAME EQU value` so uses can appear before the definition.
+        self.collect_equates(src);
+
         let mut tokens = Vec::new();
         for (idx, raw_line) in src.lines().enumerate() {
             let line_no = (idx + 1) as u32;
@@ -70,11 +84,23 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // `NAME EQU value` defines a constant (handled entirely in the pre-pass). It produces no
+        // tokens: it is not an address label and emits no bytes.
+        if split_equ_line(&chars).is_some() {
+            return;
+        }
+
         // --- Zone 1: label field (columns 1..=LABEL_WIDTH) ---
         if !chars.is_empty() && !chars[0].is_whitespace() {
             let end = LABEL_WIDTH.min(chars.len());
             let label: String = chars[..end].iter().collect::<String>().trim_end().to_string();
             if !label.is_empty() {
+                if self.equates.contains_key(&label) {
+                    self.diags.push(crate::diag::Diagnostic::error(
+                        format!("label '{}' conflicts with an EQU of the same name", label),
+                        Span::new(line_no, 1, label.chars().count() as u32),
+                    ));
+                }
                 out.push(Token::new(
                     TokenKind::Label(label.clone()),
                     Span::new(line_no, 1, label.chars().count() as u32),
@@ -168,7 +194,15 @@ impl<'a> Lexer<'a> {
                     }
                 }
 
-                let kind = classify_word(&word);
+                // A bare identifier that names an EQU constant becomes its numeric value.
+                let kind = match classify_word(&word) {
+                    TokenKind::Ident(name) => match self.equates.get(&name) {
+                        Some(&(v, false)) => TokenKind::Num(v),
+                        Some(&(v, true)) => TokenKind::Var(v),
+                        None => TokenKind::Ident(name),
+                    },
+                    other => other,
+                };
                 out.push(Token::new(kind, Span::new(line_no, col, (j - i) as u32)));
                 i = j;
                 continue;
@@ -204,6 +238,7 @@ impl<'a> Lexer<'a> {
             ('?', _) => Some((TokenKind::Question, 1)),
             ('=', _) => Some((TokenKind::Equal, 1)),
             ('>', _) => Some((TokenKind::Gt, 1)),
+            ('<', _) => Some((TokenKind::Lt, 1)),
             (',', _) => Some((TokenKind::Comma, 1)),
             // `(HL)` / `(STK)` / `(BC)` / `(DE)` are lexed as a parenthesized register group.
             ('(', _) => {
@@ -245,15 +280,107 @@ impl<'a> Lexer<'a> {
         }
         let inside: String = chars[lp + 1..j].iter().collect::<String>();
         let inside = inside.trim();
-        let value = parse_number(inside)?;
-        if !(0..=255).contains(&value) {
-            self.diags.push(crate::diag::Diagnostic::error(
-                format!("port number {} out of range (0..=255)", value),
-                Span::new(line_no, (lp + 1) as u32, inside.chars().count() as u32),
-            ));
-            return Some((0, j - lp + 1));
+        let consumed = j - lp + 1; // '(' .. ')'
+        let span = Span::new(line_no, (lp + 1) as u32, inside.chars().count() as u32);
+        match self.eval_expr(inside) {
+            Ok(value) if (0..=255).contains(&value) => Some((value as u8, consumed)),
+            Ok(value) => {
+                self.diags.push(crate::diag::Diagnostic::error(
+                    format!("port number {} out of range (0..=255)", value),
+                    span,
+                ));
+                Some((0, consumed))
+            }
+            Err(msg) => {
+                self.diags.push(crate::diag::Diagnostic::error(
+                    format!("invalid port '{}': {}", inside, msg),
+                    span,
+                ));
+                Some((0, consumed))
+            }
         }
-        Some((value as u8, j - lp + 1)) // consumed: '(' .. ')'
+    }
+
+    /// Pre-pass: collect every `NAME EQU expr` line into `self.equates`, in source order (an
+    /// equate may only reference earlier equates).
+    fn collect_equates(&mut self, src: &str) {
+        for (idx, raw_line) in src.lines().enumerate() {
+            let line_no = (idx + 1) as u32;
+            let chars: Vec<char> = raw_line.chars().collect();
+            match chars.iter().find(|c| !c.is_whitespace()) {
+                None => continue,
+                Some('*') => continue,
+                _ => {}
+            }
+            let Some(equ) = split_equ_line(&chars) else { continue };
+            let span = Span::new(line_no, 1, chars.len().max(1) as u32);
+            let Some(name) = equ.name else {
+                self.diags.push(crate::diag::Diagnostic::error("EQU requires a name in the label field", span));
+                continue;
+            };
+            if !is_valid_equ_name(&name) {
+                self.diags.push(crate::diag::Diagnostic::error(
+                    format!("'{}' is not a valid or is a reserved name for EQU", name),
+                    span,
+                ));
+                continue;
+            }
+            if self.equates.contains_key(&name) {
+                self.diags.push(crate::diag::Diagnostic::error(
+                    format!("duplicate EQU '{}'", name),
+                    span,
+                ));
+                continue;
+            }
+            match self.eval_expr(&equ.expr) {
+                Ok(v) => {
+                    self.equates.insert(name, (v, equ.is_var));
+                }
+                Err(msg) => self.diags.push(crate::diag::Diagnostic::error(
+                    format!("invalid EQU value for '{}': {}", name, msg),
+                    span,
+                )),
+            }
+        }
+    }
+
+    /// Evaluate `term (+|- term)*` where a term is a number or an earlier equate.
+    fn eval_expr(&self, text: &str) -> Result<i64, String> {
+        let mut total: i64 = 0;
+        let mut sign: i64 = 1;
+        let mut term = String::new();
+        let flush = |term: &mut String, sign: i64, total: &mut i64, this: &Self| -> Result<(), String> {
+            let v = this.eval_term(term.trim())?;
+            *total = total
+                .checked_add(sign.checked_mul(v).ok_or("arithmetic overflow")?)
+                .ok_or("arithmetic overflow")?;
+            term.clear();
+            Ok(())
+        };
+        for ch in text.chars() {
+            if ch == '+' || ch == '-' {
+                flush(&mut term, sign, &mut total, self)?;
+                sign = if ch == '+' { 1 } else { -1 };
+            } else {
+                term.push(ch);
+            }
+        }
+        flush(&mut term, sign, &mut total, self)?;
+        Ok(total)
+    }
+
+    fn eval_term(&self, t: &str) -> Result<i64, String> {
+        let first = t.chars().next().ok_or_else(|| "missing operand".to_string())?;
+        if first.is_ascii_digit() {
+            parse_number(t).ok_or_else(|| format!("invalid numeric literal '{}'", t))
+        } else if is_ident_start(first) && t.chars().all(is_ident_part) {
+            self.equates
+                .get(t)
+                .map(|&(v, _)| v)
+                .ok_or_else(|| format!("undefined equate '{}'", t))
+        } else {
+            Err(format!("invalid operand '{}'", t))
+        }
     }
 
     /// Lex a numeric literal starting at `i`. Returns (value, width-in-chars).
@@ -302,6 +429,53 @@ pub fn parse_number(text: &str) -> Option<i64> {
     }
 }
 
+struct EquLine {
+    /// True for `NAME VAR addr` (a memory variable), false for `NAME EQU value`.
+    is_var: bool,
+    name: Option<String>,
+    expr: String,
+}
+
+/// Recognize `NAME EQU expr`: the name sits in the label field, `EQU` starts the instruction
+/// field (column LABEL_WIDTH+1 onward, after optional blanks).
+fn split_equ_line(chars: &[char]) -> Option<EquLine> {
+    if chars.len() <= LABEL_WIDTH {
+        return None;
+    }
+    let rest: String = chars[LABEL_WIDTH..].iter().collect();
+    let rest = rest.trim_start();
+    let head = rest.get(..3)?;
+    let is_var = head.eq_ignore_ascii_case("VAR");
+    if !is_var && !head.eq_ignore_ascii_case("EQU") {
+        return None;
+    }
+    let tail = &rest[3..];
+    if !tail.is_empty() && !tail.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let name: String = chars[..LABEL_WIDTH].iter().collect::<String>().trim().to_string();
+    let name = if chars[0].is_whitespace() || name.is_empty() { None } else { Some(name) };
+    Some(EquLine { is_var, name, expr: tail.trim().to_string() })
+}
+
+/// An EQU name must be an identifier that is not a register, flag, or directive keyword.
+fn is_valid_equ_name(name: &str) -> bool {
+    let mut it = name.chars();
+    match it.next() {
+        Some(c) if is_ident_start(c) => {}
+        _ => return false,
+    }
+    if !name.chars().all(is_ident_part) {
+        return false;
+    }
+    if !matches!(classify_word(name), TokenKind::Ident(_)) {
+        return false;
+    }
+    !["CALL", "RTN", "ORG", "DB", "DW", "DS", "EQU", "VAR", "PORT", "PAUSE", "WAIT", "NOT", "DEC"]
+        .iter()
+        .any(|k| name.eq_ignore_ascii_case(k))
+}
+
 fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_' || c == '.'
 }
@@ -324,13 +498,13 @@ fn classify_word(word: &str) -> TokenKind {
         "BC" => TokenKind::Reg(Reg::BC),
         "DE" => TokenKind::Reg(Reg::DE),
         "SP" => TokenKind::Reg(Reg::SP),
-        "PSW" => TokenKind::Reg(Reg::Psw),
         // `STK` (no parens) is the stack operand used for push/pop: `HL:STK`, `STK:HL`.
         "STK" => TokenKind::Reg(Reg::Stk),
         "FC" => TokenKind::Flag(FlagKind::C),
         "FP" => TokenKind::Flag(FlagKind::P),
         "FS" => TokenKind::Flag(FlagKind::S),
         "FZ" => TokenKind::Flag(FlagKind::Z),
+        "FI" => TokenKind::Flag(FlagKind::I),
         _ => TokenKind::Ident(word.to_string()),
     }
 }
@@ -340,8 +514,8 @@ fn parenthesized_reg(inside: &str) -> Option<Reg> {
     match inside.trim().to_ascii_uppercase().as_str() {
         "HL" => Some(Reg::M),
         "STK" => Some(Reg::Stk),
-        "BC" => Some(Reg::BC),
-        "DE" => Some(Reg::DE),
+        "BC" => Some(Reg::AtBC),
+        "DE" => Some(Reg::AtDE),
         _ => None,
     }
 }

@@ -16,6 +16,7 @@ dependencies = [
  "cpt-machine",
  "i8080-cpu",
  "i8080-isa",
+ "mol80asm",
 ]
 
 [[package]]

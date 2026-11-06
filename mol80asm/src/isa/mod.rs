@@ -9,6 +9,6 @@ pub use encode::{
     EncodeError,
 };
 pub use table::{
-    cmp_reg, cond_jump, cond_return, pair_name, pop_opcode, push_opcode, CondJumpInfo,
-    CondRetInfo, IsaEntry, Pattern, CALL, ISA, JMP, RET,
+    cmp_reg, cond_call, cond_jump, cond_return, pair_name, pop_opcode, push_opcode, CondJumpInfo,
+    CondRetInfo, IsaEntry, Pattern, CALL, CPI, ISA, JMP, RET,
 };

@@ -40,6 +40,10 @@ pub enum Reg {
     Stk,
     /// Program status word (A + flags), used by PUSH/POP PSW.
     Psw,
+    /// `(BC)` — memory addressed by BC (STAX/LDAX B).
+    AtBC,
+    /// `(DE)` — memory addressed by DE (STAX/LDAX D).
+    AtDE,
 }
 
 /// The PSW flags MOL80 can test: `FC`, `FP`, `FS`, `FZ`.
@@ -53,6 +57,8 @@ pub enum FlagKind {
     S,
     /// Zero.
     Z,
+    /// Interrupt enable (`FI`): only ever assigned (`1:FI` = EI, `0:FI` = DI), never tested.
+    I,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +75,8 @@ pub enum TokenKind {
     Num(i64),
     /// An I/O port operand `PORT(n)` (the parsed port number). [CONFIRMED from scan]
     Port(u8),
+    /// A direct-memory variable address (from a `NAME VAR addr` symbol). [VERIFY]
+    Var(i64),
     /// A double-quoted string literal (contents, unescaped). Used by the `DB` directive.
     Str(String),
 
@@ -99,8 +107,10 @@ pub enum TokenKind {
     StarStar,
     /// `*` (bare star; e.g. appears in rotate forms).
     Star,
-    /// `>` direction marker (appears in rotate forms).
+    /// `>` direction marker (appears in rotate forms); also closes a `<...>` annotation.
     Gt,
+    /// `<` opens a side-effect annotation such as `<F>` (destroys flags).
+    Lt,
 
     /// End of a logical line.
     Eol,

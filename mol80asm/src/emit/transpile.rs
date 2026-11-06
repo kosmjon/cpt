@@ -65,13 +65,10 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
                     emit(out, &format!("{} {}", info.i8080, end));
                 }
                 Condition::Compare { lhs, rhs } => {
-                    // Only `A = <reg>` supported; CMP r then JNZ @end.
-                    if let (Operand::Reg(Reg::A), Operand::Reg(r)) = (lhs, rhs) {
-                        emit(out, &format!("CMP {}", reg_str(*r)));
+                    // `A = <reg|number>`: CMP r / CPI n, then JNZ @end.
+                    if emit_compare(lhs, rhs, out) {
                         let jnz = cond_jump(FlagKind::Z, 0);
                         emit(out, &format!("{} {}", jnz.i8080, end));
-                    } else {
-                        emit(out, "; <unsupported comparison>");
                     }
                 }
             }
@@ -81,12 +78,35 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
             out.push_str(&format!("{}:\n", end));
         }
 
+        // `CALL(0)`..`CALL(7)` are RST 0..7 (restart n = call address 8n). [CONFIRMED from scan]
+        Item::Call { target: crate::ast::JumpTarget::Addr(n @ 0..=7) } => emit(out, &format!("RST {}", n)),
         Item::Call { target } => emit(out, &format!("CALL {}", target_str(target))),
 
         Item::Return => emit(out, "RET"),
 
+        Item::CondCall { flag, value, target } => {
+            let info = crate::isa::cond_call(*flag, *value);
+            let target = match target {
+                crate::ast::JumpTarget::Addr(n @ 0..=7) => crate::ast::JumpTarget::Addr(n * 8),
+                t => t.clone(),
+            };
+            emit(out, &format!("{} {}", info.i8080, target_str(&target)));
+        }
+
         Item::CondReturn { flag, value } => {
             emit(out, cond_return(*flag, *value).i8080);
+        }
+
+        Item::CompareJump { rhs, target } => {
+            if emit_compare(&Operand::Reg(Reg::A), rhs, out) {
+                emit(out, &format!("JZ {}", target_str(target)));
+            }
+        }
+
+        Item::CompareReturn { rhs } => {
+            if emit_compare(&Operand::Reg(Reg::A), rhs, out) {
+                emit(out, "RZ");
+            }
         }
 
         Item::Push { rp } => emit(out, &format!("PUSH {}", pair_name(*rp))),
@@ -106,6 +126,15 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
         // Directives transpile to the standard 8080 assembler spellings.
         Item::Org { addr } => emit(out, &format!("ORG {:04X}H", addr)),
         Item::DefineSpace { count } => emit(out, &format!("DS {}", count)),
+        Item::Fixed { asm, .. } => emit(out, asm),
+        Item::CarryAlu { subtract, rhs } => {
+            let (rm, im) = if *subtract { ("SBB", "SBI") } else { ("ADC", "ACI") };
+            match rhs {
+                Operand::Reg(r) => emit(out, &format!("{} {}", rm, reg_str(*r))),
+                Operand::Imm(n) => emit(out, &format!("{} {:02X}H", im, (*n & 0xFF) as u8)),
+                _ => emit(out, "; <unsupported carry arithmetic>"),
+            }
+        }
         Item::DefineWords { values } => {
             let list: Vec<String> = values.iter().map(|v| format!("{:04X}H", v)).collect();
             emit(out, &format!("DW {}", list.join(",")));
@@ -124,11 +153,33 @@ fn transpile_item(item: &Item, out: &mut String, internal: &mut u32) {
     }
 }
 
+/// Emit `CMP r` / `CPI n` for `A = rhs`. Returns false (after a marker comment) if unsupported.
+fn emit_compare(lhs: &Operand, rhs: &Operand, out: &mut String) -> bool {
+    match (lhs, rhs) {
+        (Operand::Reg(Reg::A), Operand::Reg(r)) => {
+            emit(out, &format!("CMP {}", reg_str(*r)));
+            true
+        }
+        (Operand::Reg(Reg::A), Operand::Imm(n)) => {
+            emit(out, &format!("CPI {:02X}H", *n as u8));
+            true
+        }
+        _ => {
+            emit(out, "; <unsupported comparison>");
+            false
+        }
+    }
+}
+
 /// Transpile a pair exchange, mirroring the encoder's expansion so the asm matches the bytes.
 fn transpile_exchange(first: Reg, second: Reg, out: &mut String) {
     let is = |a: Reg, b: Reg, x: Reg, y: Reg| (a == x && b == y) || (a == y && b == x);
     if is(first, second, Reg::DE, Reg::HL) {
         emit(out, "XCHG");
+        return;
+    }
+    if is(first, second, Reg::Stk, Reg::HL) {
+        emit(out, "XTHL");
         return;
     }
     let other = if first == Reg::HL {
@@ -161,7 +212,15 @@ fn move_mnemonic(src: &Operand, dst: &Operand) -> String {
     match (src, dst) {
         (Operand::Reg(Reg::A), Operand::Port(n)) => format!("OUT {:02X}H", n),
         (Operand::Port(n), Operand::Reg(Reg::A)) => format!("IN {:02X}H", n),
+        (Operand::Direct(a), Operand::Reg(Reg::A)) => format!("LDA {:04X}H", a),
+        (Operand::Reg(Reg::A), Operand::Direct(a)) => format!("STA {:04X}H", a),
+        (Operand::Direct(a), Operand::Reg(Reg::HL)) => format!("LHLD {:04X}H", a),
+        (Operand::Reg(Reg::HL), Operand::Direct(a)) => format!("SHLD {:04X}H", a),
         (Operand::Reg(Reg::HL), Operand::Reg(Reg::SP)) => "SPHL".to_string(),
+        (Operand::Reg(Reg::A), Operand::Reg(Reg::AtBC)) => "STAX B".to_string(),
+        (Operand::Reg(Reg::A), Operand::Reg(Reg::AtDE)) => "STAX D".to_string(),
+        (Operand::Reg(Reg::AtBC), Operand::Reg(Reg::A)) => "LDAX B".to_string(),
+        (Operand::Reg(Reg::AtDE), Operand::Reg(Reg::A)) => "LDAX D".to_string(),
         (Operand::Reg(s), Operand::Reg(d)) => {
             find_mnemonic(Pattern::Move { src: *s, dst: *d })
                 .map(|m| m.to_string())

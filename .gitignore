@@ -6,6 +6,9 @@ target/
 # Assembler output
 *.bin
 
+# Generated disk images for the CP/M work (rebuilt by cpm/mkdisk.mjs)
+cpm/*.img
+
 # wasm build artifact copied into the web dir (rebuilt from source)
 crates/cpt-wasm/web/*.wasm
 
@@ -13,3 +16,7 @@ crates/cpt-wasm/web/*.wasm
 .DS_Store
 Thumbs.db
 *.swp
+
+# Generated CP/M build outputs (rebuilt by cpm/build-cpm.ps1)
+cpm/build/
+/target-verify/

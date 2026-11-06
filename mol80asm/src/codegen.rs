@@ -14,8 +14,8 @@ use crate::ast::*;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::isa::table::PCHL;
 use crate::isa::{
-    cmp_reg, cond_jump, cond_return, encode_alu, encode_dad, encode_dcx, encode_exchange,
-    encode_inx, encode_move, pop_opcode, push_opcode, CALL, JMP, RET,
+    cmp_reg, cond_call, cond_jump, cond_return, encode_alu, encode_dad, encode_dcx, encode_exchange,
+    encode_inx, encode_move, pop_opcode, push_opcode, CALL, CPI, JMP, RET,
 };
 use crate::symbols::SymbolTable;
 use crate::token::{FlagKind, Reg, Span};
@@ -247,9 +247,44 @@ fn lower_item(
             lower_cond_block(cond, body, span, emits, symbols, diags);
         }
 
+        // `CALL(0)`..`CALL(7)` are RST 0..7: one byte 0xC7 + 8n, calling address 8n.
+        // [CONFIRMED from scan] So `CALL(n)` with n < 8 is a restart, not a call to address n.
+        Item::Call { target: JumpTarget::Addr(n @ 0..=7) } => {
+            emits.push(Emit::Bytes(vec![0xC7 + 8 * (*n as u8)]));
+        }
+
         Item::Call { target } => lower_jump(CALL, target, span, emits, diags),
 
+        // `Fx=v? CALL(s)`. As with plain CALL, a literal 0..7 means restart n (address 8n);
+        // there is no conditional RST, so that becomes a conditional call to 8n.
+        Item::CondCall { flag, value, target } => {
+            let op = cond_call(*flag, *value).opcode;
+            let target = match target {
+                JumpTarget::Addr(n @ 0..=7) => JumpTarget::Addr(n * 8),
+                t => t.clone(),
+            };
+            lower_jump(op, &target, span, emits, diags);
+        }
+
         Item::Return => emits.push(Emit::Bytes(vec![RET])),
+
+        Item::CompareJump { rhs, target } => {
+            match compare_bytes(&Operand::Reg(Reg::A), rhs) {
+                Ok(b) => {
+                    emits.push(Emit::Bytes(b));
+                    lower_jump(cond_jump(FlagKind::Z, 1).opcode, target, span, emits, diags);
+                }
+                Err(m) => diags.push(Diagnostic::error(m, span)),
+            }
+        }
+
+        Item::CompareReturn { rhs } => match compare_bytes(&Operand::Reg(Reg::A), rhs) {
+            Ok(b) => {
+                emits.push(Emit::Bytes(b));
+                emits.push(Emit::Bytes(vec![cond_return(FlagKind::Z, 1).opcode]));
+            }
+            Err(m) => diags.push(Diagnostic::error(m, span)),
+        },
 
         Item::CondReturn { flag, value } => {
             let info = cond_return(*flag, *value);
@@ -306,6 +341,41 @@ fn lower_item(
         }
 
         Item::DefineSpace { count } => emits.push(Emit::Space(*count)),
+
+        Item::Fixed { bytes, .. } => emits.push(Emit::Bytes(bytes.clone())),
+
+        Item::CarryAlu { subtract, rhs } => {
+            let (reg_base, imm_op) = if *subtract { (0x98u8, 0xDEu8) } else { (0x88, 0xCE) };
+            match rhs {
+                // ADC A (143) and SBB A (159) are never used in MOL80. [CONFIRMED]
+                Operand::Reg(Reg::A) => diags.push(Diagnostic::error(
+                    if *subtract {
+                        "`A-FC-A:A` (SBB A, opcode 159) is not a MOL80 instruction"
+                    } else {
+                        "`A+FC+A:A` (ADC A, opcode 143) is not a MOL80 instruction"
+                    },
+                    span,
+                )),
+                Operand::Reg(r) => match crate::isa::table::reg_index(*r) {
+                    Some(i) => emits.push(Emit::Bytes(vec![reg_base + i as u8])),
+                    None => diags.push(Diagnostic::error(
+                        format!("cannot use {:?} in carry arithmetic", r),
+                        span,
+                    )),
+                },
+                Operand::Imm(n) if (-128..=255).contains(n) => {
+                    emits.push(Emit::Bytes(vec![imm_op, (*n & 0xFF) as u8]))
+                }
+                Operand::Imm(n) => diags.push(Diagnostic::error(
+                    format!("value {} does not fit in a byte", n),
+                    span,
+                )),
+                other => diags.push(Diagnostic::error(
+                    format!("carry arithmetic needs a register or number, got {:?}", other),
+                    span,
+                )),
+            }
+        }
     }
 }
 
@@ -395,8 +465,24 @@ fn lower_cond_block(
     emits.push(Emit::LabelDef(end_label));
 }
 
-/// Lower an equality comparison `A = rhs` into `CMP rhs` and set up a JNZ-to-end branch.
-/// Emits the CMP here; the branch (JNZ @end) is pushed by the caller via this helper.
+/// Bytes for `A = rhs`: `CMP r` for a register, `CPI n` (opcode 254) for an immediate.
+/// The comparison leaves Z set when equal.
+fn compare_bytes(lhs: &Operand, rhs: &Operand) -> Result<Vec<u8>, String> {
+    if !matches!(lhs, Operand::Reg(Reg::A)) {
+        return Err("only 'A = <register|number>' comparisons are supported so far".to_string());
+    }
+    match rhs {
+        Operand::Reg(r) => cmp_reg(*r)
+            .map(|op| vec![op])
+            .ok_or_else(|| format!("cannot compare against {:?}", r)),
+        Operand::Imm(n) if (0..=255).contains(n) => Ok(vec![CPI, *n as u8]),
+        Operand::Imm(n) => Err(format!("comparison value {} out of range (0..=255)", n)),
+        _ => Err("only 'A = <register|number>' comparisons are supported so far".to_string()),
+    }
+}
+
+/// Lower an equality comparison `A = rhs` and branch to `end_label` when NOT equal (JNZ), so a
+/// following block body runs only when equal.
 fn lower_compare_eq(
     lhs: &Operand,
     rhs: &Operand,
@@ -405,35 +491,16 @@ fn lower_compare_eq(
     emits: &mut Vec<Emit>,
     diags: &mut Diagnostics,
 ) {
-    // Only `A = <reg>` is supported for now.
-    let a_is_lhs = matches!(lhs, Operand::Reg(Reg::A));
-    let rhs_reg = match rhs {
-        Operand::Reg(r) => Some(*r),
-        _ => None,
-    };
-
-    match (a_is_lhs, rhs_reg) {
-        (true, Some(r)) => match cmp_reg(r) {
-            Some(cmp) => {
-                emits.push(Emit::Bytes(vec![cmp]));
-                // Skip body when NOT equal -> JNZ @end (zero flag clear means not equal).
-                let info = cond_jump(FlagKind::Z, 0); // JNZ
-                emits.push(Emit::AddrRef {
-                    opcode: info.opcode,
-                    label: end_label.to_string(),
-                    span,
-                });
-            }
-            None => diags.push(Diagnostic::error(
-                format!("cannot compare against {:?}", r),
+    match compare_bytes(lhs, rhs) {
+        Ok(b) => {
+            emits.push(Emit::Bytes(b));
+            let info = cond_jump(FlagKind::Z, 0); // JNZ
+            emits.push(Emit::AddrRef {
+                opcode: info.opcode,
+                label: end_label.to_string(),
                 span,
-            )),
-        },
-        _ => diags.push(Diagnostic::error(
-            "only 'A = <register>' comparisons are supported so far".to_string(),
-            span,
-        )),
+            });
+        }
+        Err(m) => diags.push(Diagnostic::error(m, span)),
     }
 }
-
-

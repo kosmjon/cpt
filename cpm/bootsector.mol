@@ -1,0 +1,51 @@
+* ===========================================================================
+*  CP/M-over-serial, increment 3: BOOT SECTOR (block 0 of the disk).
+*
+*  Loaded to 0100H by the boot ROM (cpm/boot.mol) and run from there.  It must fit in
+*  one 128-byte block.  For now it just proves the boot path: it prints a banner on
+*  the serial console, then echoes whatever is typed.  Later increments replace it
+*  with a loader that reads the CP/M system tracks and starts the BIOS.
+*
+*  Serial console (placeholder ports; [VERIFY] vs. real hardware):
+*     112 DATA   113 STATUS (bit 0 = RX ready, bit 1 = TX ready)
+*  The boot ROM has already set up the stack.
+* ===========================================================================
+SERDATA   EQU 112
+SERSTAT   EQU SERDATA+1
+RXRDY     EQU 1
+TXRDY     EQU 2
+*
+          ORG 256
+*
+BOOTSEC   MSG:HL
+          CALL(PRINT)
+ECHO      CALL(CONIN)
+          CALL(CONOUT)
+          /ECHO
+*
+*  CONOUT: send the byte in A (wait for TX ready; keep A across the poll).
+CONOUT    A:STK
+COWAIT    PORT(SERSTAT):A
+          A+*TXRDY:A
+          FZ=1? /COWAIT
+          STK:A
+          A:PORT(SERDATA)
+          RTN
+*
+*  CONIN: wait for a received byte and return it in A.
+CONIN     PORT(SERSTAT):A
+          A+*RXRDY:A
+          FZ=1? /CONIN
+          PORT(SERDATA):A
+          RTN
+*
+*  PRINT: send the NUL-terminated string at HL.
+PRINT     (HL):A
+          A+*255:A
+          FZ=1? /PDONE
+          CALL(CONOUT)
+          HL+1:HL
+          /PRINT
+PDONE     RTN
+*
+MSG       DB "BOOT SECTOR RUNNING (MOL80)", 13, 10, 0
