@@ -34,10 +34,15 @@ multi-instruction forms):
 - The dual-move exchange `a:b/b:a` (XCHG, or a push/copy/pop expansion)
 - Binary output, hex listing, and standard-8080 transpilation
 
+Every 8080 instruction MOL80 uses now has its scan-confirmed spelling (EI/DI, rotates,
+carry arithmetic, LDAX/STAX, XTHL, RST, conditional calls, NOP/HLT, ...); opcodes MOL80
+never uses are rejected. Placeholder directives (`ORG`/`DB`/`DW`/`DS`, `EQU`, `VAR`) are
+our own convention until the manual confirms the real spellings.
+
 Not yet implemented (awaiting the official MOL80 manual / real source):
 - The MOL80 "Layer 2" macro/expansion set, including the `using` `<reg>` clause and
   `(HL+offset)` page-aligned array addressing
-- Data-definition directives, the full 256-entry opcode table, confirmed radix markers
+- Confirmed directive spellings and radix markers
 
 ### CPT 8000/9000 emulator (in progress)
 
@@ -68,6 +73,92 @@ cargo run -p cpt-run -- --trace --steps 20 out.bin
 # vertical-retrace interrupt handler scrolls the text (give it enough steps to retrace):
 cargo run -p cpt-run -- --demo --steps 40000
 ```
+
+## Running CP/M 2.2 over the emulated serial port
+
+A side project that exercises the emulator end to end: stock Digital Research CP/M 2.2 boots
+on the emulated machine, with its **BIOS written in MOL80** (`cpm/bios.mol`). The console is
+the emulated serial port, which `cpt-run` exposes as a TCP socket; you connect to it with a
+Telnet client (e.g. MobaXterm, PuTTY, or `telnet`) as a VT100-style terminal.
+
+Prerequisites: Rust (cargo), Python 3, and Node.js, all on the PATH.
+
+### 1. Build the disks
+
+From the repo root:
+
+```
+powershell -File cpm/build-cpm.ps1
+```
+
+This produces, under `cpm/build/` (gitignored):
+
+| File | What it is |
+|------|------------|
+| `boot.bin` | Boot ROM (`cpm/boot.mol`), loaded at reset |
+| `cpm.img` | Bootable system disk for drive 1 (A:): loader, CCP, BDOS, BIOS on the system tracks, plus the DRI utilities (ASM, DDT, DUMP, ED, LOAD, PIP, STAT, SUBMIT, XSUB) |
+| `data.img` | Blank formatted data disk for drive 2 (B:) |
+
+The CCP and BDOS are assembled from the vendored DRI source in `cpm/vendor/` by a small
+Python 8080 assembler (`cpm/tools/asm80.py`); the boot ROM, loader and BIOS are MOL80,
+assembled by `mol80asm`. Rebuilding overwrites both images, including any files you saved
+on them.
+
+### 2. Start the emulator
+
+```
+cargo run -p cpt-run -- --serial-listen 127.0.0.1:2323 --disk1 cpm/build/cpm.img --disk2 cpm/build/data.img cpm/build/boot.bin
+```
+
+It waits for a connection (`serial: listening on 127.0.0.1:2323 ...`). Any free port works.
+
+### 3. Connect a terminal
+
+Open a **Telnet** session to `127.0.0.1`, port `2323`. In MobaXterm: Session → Telnet,
+host `127.0.0.1`, port `2323`. You should see:
+
+```
+CP/M 2.2 on CPT (MOL80 BIOS)
+A>
+```
+
+Try `DIR`, `STAT`, `STAT *.*`, `B:`, or `PIP B:=A:STAT.COM`.
+
+How the serial link behaves:
+- `--serial-listen` acts as a Telnet server: it tells the client the guest does the echoing
+  and to send each keystroke immediately, and it strips Telnet control bytes from the input.
+  Leave the client's local echo at its default; you should see each character once.
+- The BIOS drops the LF (or NUL) a Telnet client sends after CR, so Enter gives one prompt.
+- For a raw TCP client with no Telnet negotiation, add `--serial-raw` after the address.
+
+### Disks and persistence
+
+- Disk images are file-backed. The BIOS flushes after every write, so files you `SAVE` or
+  `PIP` persist even if you kill the emulator.
+- Make another blank data disk with `python cpm/tools/cpmfs.py my.img mkblank`.
+- List a disk from the host with `python cpm/tools/cpmfs.py cpm/build/cpm.img ls`, or copy
+  host files onto it with `python cpm/tools/cpmfs.py cpm/build/cpm.img add FILE...`
+  (while the emulator is not running).
+- Geometry: 8-inch IBM 3740 layout, 77 tracks × 26 sectors × 128 bytes, 2 system tracks,
+  1K blocks, 64 directory entries, no sector skew.
+
+### Stopping, and "failed to remove file"
+
+Ctrl+C in the emulator's terminal stops it. Closing the Telnet session may leave it running.
+A running `cpt-run` locks `target\debug\cpt-run.exe`, so a rebuild fails with
+`error: failed to remove file ...cpt-run.exe`. Stop it first:
+
+```
+Get-Process cpt-run | Stop-Process
+```
+
+### Tests
+
+`cargo test -p cpt-run --test cpm` boots CP/M in-process and checks `DIR`, `SAVE`, `STAT`,
+PIP to drive 2, and Telnet line endings. These tests need `cpm/build/` (run
+`build-cpm.ps1` first) and skip themselves if it's missing.
+
+More detail: `.kiro/specs/cpt8000-emulator/cpm-over-serial.md`.
 
 ## Specs
 
