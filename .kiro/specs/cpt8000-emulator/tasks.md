@@ -92,6 +92,49 @@
   - [ ] 9.7 Tests: packing fits/overflows, bank-0 placement, byte-exact tables once format known.
     - _Requirements: 7.2, 7.3, 7.4_
 
+- [ ] 9c. System build driver (`cpt-build`) — planned. Builds the dozens of `.mol` modules
+      into a bootable system disk image with one command, replacing ad-hoc scripts like
+      `cpm/build-cpm.ps1`. A Rust binary in the workspace rather than GNU Make: Make isn't on
+      the Windows dev machine, and the link / bin-pack / segment-table / image steps have
+      multi-output dependencies a makefile expresses poorly. The skeleton is buildable now;
+      the link step is **BLOCKED** on the same object-module facts as task 9.
+  - [ ] 9c.1 Project manifest (e.g. `system.toml`): segments, the `.mol` modules in each,
+        fixed placements (bank 0 resident code, interrupt vectors, entry point), output image
+        path. Mirror the original CPT build/link control files if they turn up with the source.
+  - [ ] 9c.2 Incremental assembly: call `mol80asm` as a library (no process per file);
+        re-assemble a module only when its source hash changes; cache objects under
+        `target/cpt-build/`; assemble modules in parallel; report all diagnostics.
+  - [ ] 9c.3 Interim pipeline (not blocked): treat each segment as one assembly unit (its
+        modules concatenated, one symbol table), so no linker is needed yet; then pack
+        segments into blocks and write the image. Gets an end-to-end build running before the
+        object format is known; the manifest stays the same when the real linker drops in.
+  - [ ] 9c.4 Link step: invoke `cpt-link` (task 9) per segment, then the bin-pack and
+        segment-table generation (9.2-9.5). [BLOCKED on task 9]
+  - [ ] 9c.5 Image writer: emit the system disk image in the layout the CPT boot path expects
+        ([VERIFY] from source), reusing the image code from the CP/M work (`cpm/mkcpm.mjs`,
+        `cpm/tools/cpmfs.py`) ported to Rust.
+  - [ ] 9c.6 Single entry point `cargo run -p cpt-build -- system.toml`, plus tests: rebuild
+        skips unchanged modules, a changed module triggers only its segment, and the image is
+        byte-identical across clean and incremental builds.
+  - [ ] 9c.7 Build flavors (e.g. minimal vs full, CPT 8000 vs Phoenix). Design the manifest
+        for them from the start:
+    - A shared base segment list plus `[flavor.<name>]` sections that `remove` segments,
+      `replace` a segment's module list (e.g. Phoenix's bitmapped display driver), and set
+      `defines` injected as `NAME EQU value` constants. Selected with
+      `cpt-build system.toml --flavor <name>`; each flavor writes its own image.
+    - In-module differences: injected EQU constants work today; choosing code paths needs
+      conditional assembly (IF/ELSE/ENDIF), which MOL80 may or may not have had ([VERIFY]
+      against the manual; add to the assembler checklist).
+    - Object cache keyed by source hash **and** the flavor's defines, so switching flavors
+      never reuses an object built with different constants.
+    - The image records which flavor (and machine profile) built it, for the emulator check
+      in task 15.
+    - Mirror however CPT actually produced its model variants (per-model source files,
+      conditional assembly, or per-product build lists) once the source shows it ([VERIFY]).
+    - Tests: two flavors from one manifest give different images; a flavor's removed segment
+      is absent; a define changes only the modules that use it.
+  - _Requirements: 7.1-7.6_
+
 - [x] 8b. Bidirectional serial port (USART) — `SerialDevice` with DATA + STATUS ports, RX/TX
       queues, optional RX interrupt; a `Transport` trait with `LoopbackTransport` (wasm-safe) and
       a native `TcpTransport` (listen/connect, threaded, non-blocking) wired into `cpt-run` via
@@ -143,6 +186,23 @@
 - [ ] 13. Cross-spec validation loop
   - Assemble a small MOL80 program with `mol80asm`, load the binary, run headless, assert state.
   - _Requirements: 7.4_
+
+- [ ] 15. Machine profiles and the Phoenix bitmapped display — planned. A Phoenix program disk
+      (task 9c.7) needs Phoenix hardware to run on; minimal/full flavors run on the same
+      hardware and need nothing here. **BLOCKED** on Phoenix hardware details ([VERIFY]).
+  - [ ] 15.1 Turn `MachineConfig` into named profiles (`cpt8000`, `phoenix`, ...) covering the
+        device mix, memory map, and ports; select with `cpt-run --machine <profile>` and the
+        equivalent wasm/web option. Default stays `cpt8000`.
+  - [ ] 15.2 Make the display device pluggable behind a common interface: the existing
+        character-cell `DisplayDevice` and a new bitmapped framebuffer device for Phoenix
+        (framebuffer address/banking, resolution, pixel format, retrace interrupt [VERIFY]).
+  - [ ] 15.3 Web UI renders either a character page snapshot or a pixel framebuffer,
+        depending on the profile.
+  - [ ] 15.4 Check that the loaded image's recorded flavor/profile matches the running machine
+        profile; refuse with a clear message instead of running a mismatched image.
+  - [ ] 15.5 Tests: profile selection wires the right devices; framebuffer writes appear in the
+        snapshot; mismatched image is rejected.
+  - _Requirements: 3.1-3.5, 8.1-8.4 (to be extended for Phoenix)_
 
 - [ ] 14. Resolve [VERIFY] hardware details against CPT references
   - Fill `MachineConfig` (bank-select port + encoding + block count, device ports), bank0 ROM/RAM split,

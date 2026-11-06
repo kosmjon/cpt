@@ -16,19 +16,33 @@ Status tags used in the specs:
 ## MOL80 assembler — resolve from the manual + a real source listing
 
 - [ ] 1. Logical-operator spelling: confirm `+*`=AND, `-*`=OR, `**`=XOR.
-- [ ] 2. Rotate mnemonics/direction: `>` meaning; which of RLC/RRC/RAL/RAR each form is.
+- [x] 2. Rotate mnemonics/direction — CONFIRMED from the scan: `A<*1:A` = RLC (7),
+      `A>*1:A` = RRC (15), `A,FC<*1:FC,A` = RAL (23), `FC,A>*1:A,FC` = RAR (31).
 - [ ] 3. Radix markers for binary and hex literals.
 - [ ] 4. Data-definition directives (byte / word / string / reserve-storage) syntax — we use
       placeholder `DB`/`DW`/`DS` for now; confirm the real MOL80 spellings.
-- [ ] 5. Assembler directives: `ORG`, EQU, any others — we use placeholder `ORG` and `NAME EQU expr`
+- [ ] 5. Assembler directives: `ORG`, EQU, any others — we use placeholder `ORG`, `NAME EQU expr`
+      and `NAME VAR addr` (direct-memory variables: `s:A`=LDA, `A:s`=STA, `s:HL`=LHLD,
+      `HL:s`=SHLD; the opcodes are confirmed, the VAR keyword is ours)
       (implemented in the lexer; absolute constants, `+`/`-` only); confirm the
       real spelling and whether EQU/others exist.
       (Note: I/O via `A:PORT(n)`/`PORT(n):A` is CONFIRMED from the scan, not a placeholder.)
 - [ ] 6. Inline-comment start column (currently disabled; `*` full-line comments are CONFIRMED
       and likely also the block/header-comment form — confirm whether there is anything more).
 - [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists.
-- [ ] 8. The full verified table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 (256 entries).
+- [x] 8. The full table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 — CONFIRMED from the
+      scan for every opcode MOL80 uses (EI/DI, rotates, DAA/CMA/STC/CMC, NOP/HLT as
+      `PAUSE`/`WAIT`, ORA A/XRA A as `0:FC<F>`/`0:A`, LDAX/STAX, XTHL, RST as `CALL(0..7)`,
+      ADC/ACI/SBI, conditional calls; CMP/CPI only inside `A=x?` conditions). Opcodes never
+      used in MOL80 are listed and rejected: 143, 159, 167, and the undocumented 8, 16, 32,
+      40, 48, 56, 203, 217, 237, 253. Remaining unconfirmed rows are tracked in 8a and item 1.
+- [ ] 8a. Residual unconfirmed rows: SBB r (152..158) assumed `A-FC-r:A` by symmetry with
+      SBI; LXI BC/DE/SP (`nn:BC`, `nn:DE`, `nn:SP`) by the regular encoding (only `nn:HL`
+      confirmed); whether `MVI A,0` (62 with operand 0) has a spelling, since `0:A` is XRA A.
 - [ ] 9. Operand expression syntax (e.g. `LABEL+2` arithmetic on labels/constants).
+- [ ] 9a. Conditional assembly: did MOL80 have IF/ELSE/ENDIF (or similar) for building model
+      variants from shared source? Spelling and semantics. (Needed for build flavors, emulator
+      task 9c.7.)
 - [ ] 9b. **Module / object-module model** (gates the linker — see "Linker is blocked" below):
       - [ ] 9b-i.  Local vs. public symbols within a module: MOL80 had **module-local symbols**;
                    what is the rule for which symbols are local vs. visible to other modules?
@@ -91,6 +105,10 @@ Status tags used in the specs:
 - [ ] S5. Work-block heap location/size (from the allocator source).
 - [ ] S6. Any bin-packing constraints (segments that must share a bank, alignment, etc.).
 - [ ] S7. Relocatable object format `mol80asm` should emit for the linker.
+- [ ] S8. Build control files and model variants: how CPT listed the modules/segments of a
+      program disk, and how it produced variants (minimal vs full, CPT 8000 vs Phoenix) —
+      per-model source files, conditional assembly, or per-product build lists. The
+      `cpt-build` manifest (emulator task 9c) should mirror it.
 
 ### Display
 - [ ] D1. "Special display memory": dedicated display-board region vs. window into banked RAM.
@@ -104,6 +122,9 @@ Status tags used in the specs:
 - [ ] D6. Status-band fields and layout (observed `IN`, doc id, page/line).
 - [ ] D7. Ruler / margin-marker / tab encoding in display memory.
 - [ ] D8. Which physical row is the typing line; how document-scroll is realized.
+- [ ] D9. Phoenix bitmapped display: framebuffer location/banking, resolution, pixel format,
+      retrace interrupt, and any other hardware differences from the 8000 (memory map, ports,
+      devices). Needed for the `phoenix` machine profile (emulator task 15).
 
 ### Keyboard
 - NOTE: keyboard is confirmed **N-key rollover, interrupt-driven** (make/break events). The
