@@ -23,3 +23,7 @@ cpm/build/
 
 # Generated audio from the speaker demo
 speaker/*.wav
+
+# PL/M-80 toolchain download and build output for monitor/monitor.plm
+monitor/plm80tools/
+monitor/plm-build/

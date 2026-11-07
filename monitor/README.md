@@ -13,6 +13,51 @@ The full task API (`SPAWN`, `SETQUANT`, `YIELD`, `WAITSEM`, `SIGNALSEM`), the st
 design, and the interrupt-latency rules are described in the header comment of `monitor.mol`.
 `cargo test -p cpt-run --test monitor` exercises all of it.
 
+## The PL/M-80 version
+
+`monitor.plm` is the same monitor written in Intel PL/M-80: the same TCB layout and data
+addresses, stack pool, per-task quanta, fair semaphore, and demo tasks. Build and run:
+
+```
+powershell -File monitor/build-plm.ps1
+cargo run -p cpt-run -- --timer --serial-listen 127.0.0.1:2323 monitor/plm-build/monitor.bin
+```
+
+`build-plm.ps1` compiles, links and locates with Mark Ogden's C ports of the Intel ISIS-II
+tools (`plm80`, `link`, `locate`, `aomf2bin`), which `get-plm80-tools.ps1` downloads once into
+`monitor/plm80tools/` from [ogdenpm/intel80tools](https://github.com/ogdenpm/intel80tools).
+They are third-party binaries for hobbyist and academic use, so they are fetched rather than
+committed. Build output goes to `monitor/plm-build/` (both gitignored). The code is located at
+2000H, above the fixed data areas, with a jump at 0000H and the timer handler at 0020H.
+`cargo test -p cpt-run --test monitor_plm` runs the same checks as for the MOL80 version (they
+skip themselves if the binary has not been built).
+
+What had to change, because PL/M-80 has no inline assembly:
+
+- **The context switch lives in the timer interrupt procedure.** Only an `INTERRUPT`
+  procedure saves and restores every register, so `TICK` switches tasks by swapping the
+  built-in `STACKPTR`. A task therefore cannot switch away by calling the monitor:
+  `YIELD`, `WAITSEM` and `SYSEXIT` mark the task, set the quantum to expire, and `HALT`, and
+  the next tick does the switch. A voluntary switch costs up to one tick (10 ms) of latency,
+  where the MOL80 version switches at once.
+- **SPAWN primes the frame the compiler's interrupt epilogue pops**: flags, A, C, B, E, D, L,
+  H, then the entry point and `SYSEXIT`. This was read off the compiler's CODE listing; recheck
+  it if the compiler changes.
+- **The print-lock test flag is inverted**: `LOCKOFF` at 0C00H, nonzero = lock off. PL/M
+  cannot give a variable at a fixed address an initial value, so the power-on 0 has to mean
+  "lock on".
+- Shared procedures are `REENTRANT`, so their locals live on each task's own stack.
+- Each stack block is 256 bytes, not 128: compiled code with reentrant locals needs more.
+
+A compiler pitfall worth knowing: `TCB(CURRENT).SP = STACKPTR` in a single statement saves an
+SP that is **2 bytes low**, because the compiler pushes HL while it computes the element
+address and then reads SP with that push still on the stack. Reading `STACKPTR` into a plain
+variable first avoids it.
+
+Measured: interrupts are off 2.3% of the time and the longest disabled stretch is about
+1,700 cycles (the compiled `TICK`), against 653 for the hand-written MOL80. CPU share still
+follows the quantum (A:B = 2.02 for quanta 10:5).
+
 ## Using semaphores to build critical sections
 
 `WAITSEM` and `SIGNALSEM` are general: any routine can make a critical section by bracketing

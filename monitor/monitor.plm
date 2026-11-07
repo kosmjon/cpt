@@ -1,0 +1,421 @@
+/* ===========================================================================
+   A small preemptive multitasking monitor in PL/M-80: the same program as monitor.mol,
+   written in the high-level language (a throwaway study).  Build with build-plm.ps1.
+
+   Run it like the MOL80 version, with the 100 Hz task-switch timer (RST 4):
+       cpt-run --timer monitor/plm-build/monitor.bin
+
+   WHAT IS THE SAME
+     TCB table at 0800H (the same 16-byte layout), semaphore table at 0C10H, the variables
+     the tests read at the same addresses, a pool of four 128-byte stacks at 1000H, per-task
+     quanta (SPAWN's second argument; 0 = the default), a fair FIFO-handoff semaphore, and
+     the same demo: tasks A (quantum 10), B (5) and C (default, prints three lines and
+     exits), a refused fourth SPAWN, and the SPAWNREQ launcher mailbox.
+
+   WHAT HAD TO BE DIFFERENT, AND WHY
+     PL/M-80 has no inline assembly and no PUSH/POP/RET, so only an INTERRUPT procedure can
+     save and restore all registers.  The context switch therefore lives in the timer
+     interrupt procedure (TICK), which swaps the built-in STACKPTR between tasks, and:
+       * A task cannot yield or block by CALLing the monitor.  YIELD/WAITSEM mark the task,
+         set QCOUNT to 1 and HALT: the very next tick switches away.  A voluntary switch
+         costs up to one tick (10 ms) of latency, where the MOL80 version switches at once.
+       * A task that returns lands in SYSEXIT, which marks it a zombie and waits for the
+         next tick the same way.
+       * The stack frame SPAWN primes is the one the compiler's interrupt epilogue expects.
+         The prologue pushes H, D, B, PSW, so from SP upward the 12 bytes at the top of each
+         new stack are: flags A C B E D L H entry exit.  (Read off the compiler's CODE
+         listing; recheck it if the compiler changes.)
+       * Everything shared between tasks is REENTRANT (locals on the stack); otherwise two
+         tasks would corrupt each other's static locals.
+     Interrupts are enabled except around the genuinely shared updates (the stack free list,
+     claiming one TCB slot, a semaphore update, and the switch itself).
+   =========================================================================== */
+MONITOR: DO;
+
+DECLARE LIT LITERALLY 'LITERALLY';
+DECLARE FOREVER LIT 'WHILE 1';
+
+/* ---- tuning and layout ---------------------------------------------------- */
+DECLARE QUANTUM LIT '5',      /* default time slice, in 10 ms timer ticks */
+        NTASK   LIT '4',      /* TCB slots; slot 0 is the idle task */
+        NSTK    LIT '4',      /* stack blocks in the pool */
+        STKSIZE LIT '256',    /* bytes per stack block (128 overflowed: see the header) */
+        STKPOOL LIT '1000H',  /* 4 blocks of 256 bytes */
+        STKTOP  LIT '1400H';  /* end of the pool */
+
+/* TCB status codes */
+DECLARE ST$FREE    LIT '0',
+        ST$READY   LIT '1',
+        ST$BLOCKED LIT '2',
+        ST$NEW     LIT '3',   /* claimed, still being built: not runnable */
+        ST$ZOMBIE  LIT '4';   /* exited; its stack is reclaimed on the next switch */
+
+/* The TCB table: 16 bytes per slot, exactly the layout monitor.mol uses.  NXT is unused
+   here (the ring is walked by slot number) but kept for the layout. */
+DECLARE TCB(NTASK) STRUCTURE (
+    STATUS BYTE, WAITID BYTE, NXT ADDRESS, SP ADDRESS,
+    STKBLK ADDRESS, ENTRY ADDRESS, QUANT BYTE, PAD(5) BYTE ) AT (0800H);
+
+/* Semaphores: value 1 = free / 0 = held, plus a count of blocked waiters. */
+DECLARE SEM(8) STRUCTURE (VAL BYTE, WAITERS BYTE) AT (0C10H);
+DECLARE PRTSEM LIT '0';
+
+/* Variables, at the same addresses as monitor.mol (the tests read them). */
+DECLARE LOCKOFF    BYTE    AT (0C00H);   /* nonzero = print lock OFF (a test switch) */
+DECLARE QCOUNT     BYTE    AT (0C01H);   /* ticks left in the current quantum */
+DECLARE CURRENT    BYTE    AT (0C02H);   /* slot number of the running task */
+DECLARE TICKS      ADDRESS AT (0C04H);
+DECLARE FREESTK    ADDRESS AT (0C06H);   /* head of the free-stack list */
+DECLARE ZOMBIE$SLOT BYTE   AT (0C08H);   /* exited task awaiting reclaim, or 0FFH */
+DECLARE SPAWNREQ   ADDRESS AT (0C0AH);   /* launcher mailbox: a procedure address */
+DECLARE SPAWNQ     BYTE    AT (0C0CH);   /* ... and its quantum */
+DECLARE ENTRY$TBL(4) ADDRESS AT (0C20H); /* entry points a test can launch; (0) = TASKE */
+
+/* ---- strings ------------------------------------------------------------------ */
+DECLARE BANNER(*) BYTE DATA ('PL/M monitor: 3 tasks', 0DH, 0AH, 0);
+DECLARE FULLMSG(*) BYTE DATA ('task pool full', 0DH, 0AH, 0);
+DECLARE MSGA(*) BYTE DATA ('AAAAAAAAAAAAAAAAAAAA', 0DH, 0AH, 0);
+DECLARE MSGB(*) BYTE DATA ('BBBBBBBBBBBBBBBBBBBB', 0DH, 0AH, 0);
+DECLARE MSGC(*) BYTE DATA ('CCCCCCCCCC', 0DH, 0AH, 0);
+DECLARE MSGE(*) BYTE DATA ('EEEEEEEEEE', 0DH, 0AH, 0);
+
+/* ---- the stack pool ------------------------------------------------------------ */
+/* The first word of each free block links to the next free block. */
+
+/* Return a block to the pool.  The caller has interrupts off. */
+STKFREE: PROCEDURE (BLK) REENTRANT;
+    DECLARE BLK ADDRESS, LNK BASED BLK ADDRESS;
+    LNK = FREESTK;
+    FREESTK = BLK;
+END STKFREE;
+
+/* Take a block off the pool: its address, or 0 if there is none.  The caller has
+   interrupts off. */
+STKALLOC: PROCEDURE ADDRESS REENTRANT;
+    DECLARE B ADDRESS, LNK BASED B ADDRESS;
+    B = FREESTK;
+    IF B = 0 THEN RETURN 0;
+    FREESTK = LNK;
+    RETURN B;
+END STKALLOC;
+
+/* ---- the scheduler's helpers ---------------------------------------------------- */
+
+/* The next READY task after slot CUR, in ring order.  Slot 0 (idle) is always READY, so
+   this always finds one. */
+NEXT$READY: PROCEDURE (CUR) BYTE REENTRANT;
+    DECLARE CUR BYTE, I BYTE;
+    I = CUR;
+    DO FOREVER;
+        I = I + 1;
+        IF I >= NTASK THEN I = 0;
+        IF TCB(I).STATUS = ST$READY THEN RETURN I;
+    END;
+END NEXT$READY;
+
+/* Reclaim an exited task's stack and slot.  Runs inside TICK (interrupts off), after the
+   CPU has moved to another task's stack. */
+REAP: PROCEDURE REENTRANT;
+    DECLARE Z BYTE;
+    Z = ZOMBIE$SLOT;
+    IF Z <> 0FFH THEN DO;
+        CALL STKFREE(TCB(Z).STKBLK);
+        TCB(Z).STATUS = ST$FREE;
+        ZOMBIE$SLOT = 0FFH;
+    END;
+END REAP;
+
+/* ---- the timer interrupt: the preemptive context switch ------------------------------ */
+/* RST 4 (vector 0020H).  The compiler saves and restores the registers; switching tasks is
+   just swapping STACKPTR in the middle.  The swap must be done HERE, not in a called
+   procedure, or that procedure's RET would pop from the wrong stack. */
+DECLARE SAVED$SP ADDRESS;   /* scratch for TICK; see the note there */
+
+TICK: PROCEDURE INTERRUPT 4;
+    TICKS = TICKS + 1;
+    QCOUNT = QCOUNT - 1;
+    IF QCOUNT = 0 THEN DO;
+        /* Read STACKPTR into a plain variable FIRST.  Writing it straight into
+           TCB(CURRENT).SP makes the compiler push HL while it computes the element address,
+           and then it reads SP with that push still on the stack: the saved SP comes out
+           2 bytes low and the task resumes into garbage.  (Visible in the CODE listing.) */
+        SAVED$SP = STACKPTR;
+        TCB(CURRENT).SP = SAVED$SP;
+        CURRENT = NEXT$READY(CURRENT);
+        STACKPTR = TCB(CURRENT).SP;
+        CALL REAP;               /* now on the new stack: safe to free the old one */
+        QCOUNT = TCB(CURRENT).QUANT;
+    END;
+END TICK;
+
+/* ---- giving up the CPU ----------------------------------------------------------------- */
+
+/* Give up the rest of this quantum: the next tick switches away.  (Latency: up to a tick.) */
+YIELD: PROCEDURE REENTRANT;
+    QCOUNT = 1;
+    HALT;
+END YIELD;
+
+/* A task's final RETurn lands here (SPAWN put its address under the entry point). */
+SYSEXIT: PROCEDURE;
+    DISABLE;
+    TCB(CURRENT).STATUS = ST$ZOMBIE;
+    ZOMBIE$SLOT = CURRENT;
+    QCOUNT = 1;
+    ENABLE;
+    DO FOREVER;      /* the next tick switches away and never comes back */
+        HALT;
+    END;
+END SYSEXIT;
+
+/* ---- SPAWN: make a subroutine into a task ------------------------------------------------ */
+
+/* Claim a free TCB slot and mark it NEW.  Interrupts are off only for the test-and-set of
+   each single slot.  Returns the slot number, or 0FFH if none is free. */
+TCBCLAIM: PROCEDURE BYTE REENTRANT;
+    DECLARE I BYTE;
+    DO I = 0 TO NTASK - 1;
+        DISABLE;
+        IF TCB(I).STATUS = ST$FREE THEN DO;
+            TCB(I).STATUS = ST$NEW;
+            ENABLE;
+            RETURN I;
+        END;
+        ENABLE;
+    END;
+    RETURN 0FFH;
+END TCBCLAIM;
+
+/* Start ENTRY as a new task with quantum Q (0 = the default).  Returns the task's TCB
+   address, or 0 if there is no free slot or stack.  Everything except the two short list
+   operations runs with interrupts ENABLED: the slot is NEW (never scheduled), and the last
+   store makes it READY. */
+SPAWN: PROCEDURE (ENTRY, Q) ADDRESS REENTRANT;
+    DECLARE ENTRY ADDRESS, Q BYTE;
+    DECLARE (BLK, P) ADDRESS, SLOT BYTE, I BYTE;
+    DECLARE PB BASED P BYTE, PW BASED P ADDRESS;
+
+    DISABLE;
+    BLK = STKALLOC;
+    ENABLE;
+    IF BLK = 0 THEN RETURN 0;
+
+    SLOT = TCBCLAIM;
+    IF SLOT = 0FFH THEN DO;
+        DISABLE;
+        CALL STKFREE(BLK);
+        ENABLE;
+        RETURN 0;
+    END;
+
+    IF Q = 0 THEN Q = QUANTUM;
+    TCB(SLOT).STKBLK = BLK;
+    TCB(SLOT).ENTRY = ENTRY;
+    TCB(SLOT).QUANT = Q;
+    TCB(SLOT).WAITID = 0;
+
+    /* Prime the stack exactly as TICK's epilogue will pop it.  The compiler's interrupt
+       prologue pushes H, D, B, PSW (PSW on top), so the epilogue pops PSW, B, D, H, then EI
+       and RET.  From SP upward: flags, A, C, B, E, D, L, H, the entry point, and SYSEXIT
+       underneath it.  (This is read off the compiler's CODE listing; recheck it if the
+       compiler changes.) */
+    P = BLK + (STKSIZE - 12);           /* the 12-byte frame at the top of the block */
+    TCB(SLOT).SP = P;
+    PB = 2;                              /* flags (bit 1 is always set on the 8080) */
+    P = P + 1;
+    PB = 0;                              /* A */
+    P = P + 1;
+    DO I = 1 TO 6;                       /* C B E D L H */
+        PB = 0;
+        P = P + 1;
+    END;
+    PW = ENTRY;                          /* "return address": where the task starts */
+    P = P + 2;
+    PW = .SYSEXIT;                       /* where it lands if it returns */
+
+    TCB(SLOT).STATUS = ST$READY;         /* one byte store: atomic, makes it runnable */
+    RETURN .TCB(SLOT);
+END SPAWN;
+
+/* Change a task's quantum.  Takes effect the next time it is dispatched. */
+SETQUANT: PROCEDURE (SLOT, Q) REENTRANT;
+    DECLARE SLOT BYTE, Q BYTE;
+    IF Q = 0 THEN Q = QUANTUM;
+    TCB(SLOT).QUANT = Q;
+END SETQUANT;
+
+/* ---- semaphores ----------------------------------------------------------------------- */
+
+/* Acquire semaphore ID.  If free, take it.  Otherwise block (status BLOCKED, remembering
+   which semaphore) and wait for the next tick to switch away; SIGNALSEM makes us READY
+   already owning the semaphore (FIFO handoff). */
+WAITSEM: PROCEDURE (ID) REENTRANT;
+    DECLARE ID BYTE;
+    DISABLE;
+    IF SEM(ID).VAL = 1 THEN DO;
+        SEM(ID).VAL = 0;
+        ENABLE;
+        RETURN;
+    END;
+    SEM(ID).WAITERS = SEM(ID).WAITERS + 1;
+    TCB(CURRENT).STATUS = ST$BLOCKED;
+    TCB(CURRENT).WAITID = ID;
+    QCOUNT = 1;
+    ENABLE;
+    DO WHILE TCB(CURRENT).STATUS = ST$BLOCKED;
+        HALT;
+    END;
+END WAITSEM;
+
+/* Release semaphore ID.  With nobody waiting, mark it free.  Otherwise leave it held and
+   make the first task found blocked on it READY, scanning the ring from just after the
+   signalling task so waiters are served in rotation. */
+SIGNALSEM: PROCEDURE (ID) REENTRANT;
+    DECLARE ID BYTE, I BYTE, N BYTE;
+    DISABLE;
+    IF SEM(ID).WAITERS = 0 THEN DO;
+        SEM(ID).VAL = 1;
+        ENABLE;
+        RETURN;
+    END;
+    SEM(ID).WAITERS = SEM(ID).WAITERS - 1;
+    I = CURRENT;
+    DO N = 1 TO NTASK;
+        I = I + 1;
+        IF I >= NTASK THEN I = 0;
+        IF TCB(I).STATUS = ST$BLOCKED THEN
+            IF TCB(I).WAITID = ID THEN DO;
+                TCB(I).STATUS = ST$READY;
+                ENABLE;
+                RETURN;
+            END;
+    END;
+    SEM(ID).VAL = 1;         /* no waiter found (should not happen): free it */
+    ENABLE;
+END SIGNALSEM;
+
+/* ---- output ------------------------------------------------------------------------------ */
+
+/* Send C to the serial port (preemptible while it waits for the transmitter). */
+PUTCH: PROCEDURE (C) REENTRANT;
+    DECLARE C BYTE;
+    DO WHILE (INPUT(113) AND 2) = 0;
+    END;
+    OUTPUT(112) = C;
+END PUTCH;
+
+/* Waste a few thousand cycles, so a line takes long enough to span a time slice and the
+   semaphore is actually tested. */
+BURN: PROCEDURE REENTRANT;
+    DECLARE I ADDRESS;
+    DO I = 1 TO 60;
+    END;
+END BURN;
+
+/* Send the NUL-terminated string at S, slowly. */
+PRINT: PROCEDURE (S) REENTRANT;
+    DECLARE S ADDRESS, CH BASED S BYTE;
+    DO WHILE CH <> 0;
+        CALL PUTCH(CH);
+        CALL BURN;
+        S = S + 1;
+    END;
+END PRINT;
+
+/* Print the string at S as one uninterrupted line, under semaphore PRTSEM.  LOCKOFF <> 0
+   switches the lock off (a test switch to show what it prevents).  NOTE the polarity is the
+   reverse of monitor.mol's LOCKFLAG: PL/M cannot give an AT variable an initial value, so the
+   flag is chosen so that memory's power-on 0 means "lock on". */
+PRTLINE: PROCEDURE (S) REENTRANT;
+    DECLARE S ADDRESS;
+    IF LOCKOFF = 0 THEN CALL WAITSEM(PRTSEM);
+    CALL PRINT(S);
+    IF LOCKOFF = 0 THEN CALL SIGNALSEM(PRTSEM);
+END PRTLINE;
+
+/* ---- the demo tasks ------------------------------------------------------------------------ */
+
+TASKA: PROCEDURE;
+    DO FOREVER;
+        CALL PRTLINE(.MSGA);
+    END;
+END TASKA;
+
+TASKB: PROCEDURE;
+    DO FOREVER;
+        CALL PRTLINE(.MSGB);
+    END;
+END TASKB;
+
+/* TASKC prints three lines and then simply returns: SYSEXIT frees its slot and stack. */
+TASKC: PROCEDURE;
+    DECLARE N BYTE;
+    DO N = 1 TO 3;
+        CALL PRTLINE(.MSGC);
+    END;
+END TASKC;
+
+TASKD: PROCEDURE;
+    RETURN;          /* PL/M does not allow an empty procedure */
+END TASKD;
+
+/* TASKE can be launched through SPAWNREQ.  It raises its own quantum to 20 ticks, prints
+   two lines and returns. */
+TASKE: PROCEDURE;
+    DECLARE N BYTE;
+    CALL SETQUANT(CURRENT, 20);
+    DO N = 1 TO 2;
+        CALL PRTLINE(.MSGE);
+    END;
+END TASKE;
+
+/* ---- start-up (runs once; then becomes the idle task) -------------------------------------- */
+
+DECLARE (I, REQ$Q) BYTE, (P, DUMMY) ADDRESS;
+
+/* TCB table: slot 0 (this boot context) is ready; the rest are free. */
+DO I = 0 TO NTASK - 1;
+    TCB(I).STATUS = ST$FREE;
+    TCB(I).QUANT = QUANTUM;
+END;
+TCB(0).STATUS = ST$READY;
+
+/* Stack pool: chain the blocks, lowest address first. */
+FREESTK = 0;
+P = STKTOP;
+DO I = 1 TO NSTK;
+    P = P - STKSIZE;
+    CALL STKFREE(P);
+END;
+
+SEM(PRTSEM).VAL = 1;
+SEM(PRTSEM).WAITERS = 0;
+ZOMBIE$SLOT = 0FFH;
+SPAWNREQ = 0;
+TICKS = 0;
+CURRENT = 0;
+QCOUNT = QUANTUM;
+ENTRY$TBL(0) = .TASKE;
+
+CALL PRINT(.BANNER);
+ENABLE;
+
+/* A gets a double-length quantum (10 ticks), B a normal one, C the default. */
+DUMMY = SPAWN(.TASKA, 10);
+DUMMY = SPAWN(.TASKB, 5);
+DUMMY = SPAWN(.TASKC, 0);
+/* All four TCB slots are now in use: a fourth SPAWN must fail. */
+IF SPAWN(.TASKD, 0) = 0 THEN CALL PRTLINE(.FULLMSG);
+
+/* The idle task: launch anything left in the mailbox, otherwise sleep until the next tick. */
+DO FOREVER;
+    IF SPAWNREQ <> 0 THEN DO;
+        P = SPAWNREQ;
+        REQ$Q = SPAWNQ;
+        SPAWNREQ = 0;
+        DUMMY = SPAWN(P, REQ$Q);
+    END;
+    HALT;
+END;
+
+END MONITOR;
