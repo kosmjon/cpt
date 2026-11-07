@@ -1,0 +1,652 @@
+* ===========================================================================
+*  A small preemptive multitasking monitor in MOL80 (a throwaway study, after
+*  .kiro/specs/cpt8000-emulator/8080_multitasking_monitor_notes.md).
+*
+*  It runs on the emulated CPT machine with the 100 Hz task-switch timer
+*  (RST 4, vector 0020H), so run it with:   cpt-run --timer monitor.bin
+*  Output goes to the serial port.
+*
+*  TASK API
+*    SPAWN     BC = the address of a subroutine.  It becomes a new task.  E = its quantum
+*              in timer ticks (1..255, 10 ms each; 0 = the default, QUANTUM).  Returns
+*              A = 0 and HL = the task's TCB (its handle), or A = 1 and HL = 0 if there is
+*              no free TCB slot or no free stack.  The subroutine just RETurns when it is
+*              done: its stack was primed with SYSEXIT underneath the entry point, so the
+*              task is destroyed and its stack recycled automatically.
+*    SETQUANT  HL = a task's TCB, A = its new quantum (0 = default).  Takes effect the next
+*              time that task is dispatched.  A quantum is a time-slice WEIGHT, not a
+*              priority: a task with quantum 10 gets twice the CPU of one with 5 when both
+*              are always runnable, but never preempts it.  Blocking or YIELDing early gives
+*              the rest of the quantum away.  Clobbers A, DE, HL.
+*    YIELD     give up the rest of this quantum.
+*    WAITSEM   A = semaphore number.  Blocks until it is acquired; waiters are served in
+*              ring order starting after the signalling task, so none is starved.
+*    SIGNALSEM A = semaphore number.  Releases it, handing it to the next waiter.
+*              (WAITSEM/SIGNALSEM preserve BC and DE; SPAWN and the print routines do not.)
+*    Monitor calls assume the caller runs with interrupts ENABLED and return with them
+*    enabled (the 8080 cannot read its interrupt flag, so they cannot restore a prior DI).
+*    The one exception is start-up, which begins with interrupts off and turns them on at
+*    the first SPAWN.
+*    A launcher hook: store a subroutine address in SPAWNREQ (0C0AH), and its quantum in
+*    SPAWNQ (0C0CH), and the idle task will SPAWN it and clear SPAWNREQ.
+*
+*  STACK ALLOCATION
+*    Stacks come from a pool of NSTK fixed-size blocks (STKSIZE bytes each) chained into a
+*    free list: the first word of each free block points to the next free block.  Taking
+*    and returning a block is a few instructions at the list head, done with interrupts
+*    off.  A block is returned only AFTER the scheduler has switched away from it: the
+*    exiting task parks its TCB in ZOMBIE, and the next SCHED reclaims the stack once the
+*    CPU is running on another one.  Fixed blocks mean no fragmentation and O(1) alloc/free.
+*    (Variable-size stacks would need a heap with coalescing; not worth it here.)
+*
+*  KEEPING INTERRUPTS ENABLED
+*    Interrupts are off only where the data really needs to be consistent:
+*      - the context switch itself (the CPU disables them on an interrupt anyway),
+*      - popping/pushing the stack free list (a handful of instructions),
+*      - testing and claiming one TCB slot (per slot, not the whole scan),
+*      - testing/updating one semaphore.
+*    SPAWN builds the new task's whole stack frame with interrupts ON: the slot is claimed
+*    with status NEW (not runnable) and only becomes READY with a final single-byte store,
+*    which is atomic.  Printing, delays and all task code run with interrupts on.
+*    Fast path of a tick that does not end the quantum is about 120 cycles.
+*
+*  TCB layout (16 bytes):  +0 STATUS   +1 wait-for semaphore number
+*                          +2 NEXT (word)   +4 saved SP (word)
+*                          +6 stack block address (word)   +8 entry point (spawn scratch)
+*                          +10 quantum, in ticks (byte)
+*  STATUS: 0 free, 1 ready, 2 blocked on a semaphore, 3 new (being built), 4 zombie.
+*
+*  Simplifications vs. the notes: the TCB ring is static (4 slots, pre-linked).  Slot 0 is
+*  the boot context, which becomes the idle task and is always READY.
+*
+*  Memory:  0000 reset jump      0020 timer vector (RST 4)       0100 code
+*           0800 TCB table       0C00 variables                  0C10 semaphore table
+*           0E00 TASKE (a fixed address, so a test can launch it)
+*           1000-11FF stack pool (4 x 128)                       7F00 idle/boot stack
+* ===========================================================================
+*  Serial console (placeholder ports, as in cpm/bios.mol)
+SERDATA   EQU 112
+SERSTAT   EQU SERDATA+1
+TXRDY     EQU 2
+*
+QUANTUM   EQU 5
+NTASK     EQU 4
+*  TCB table
+TCB0      EQU 0800H
+TCB1      EQU TCB0+16
+TCB2      EQU TCB0+32
+TCB3      EQU TCB0+48
+*  Stack pool: NSTK blocks of STKSIZE bytes.  A new task's frame is 12 bytes at the top.
+NSTK      EQU 4
+STKPOOL   EQU 1000H
+POOLEND   EQU STKPOOL+512
+*  Semaphores: 2 bytes each (value 1 = free / 0 = held, waiter count), numbered from 0
+SEMBASE   EQU 0C10H
+PRTSEM    EQU 0
+*  Variables (direct memory; VAR is our convention, see requirements)
+LOCKFLAG  VAR 0C00H
+QCOUNT    VAR 0C01H
+CURRENT   VAR 0C02H
+TICKS     VAR 0C04H
+FREESTK   VAR 0C06H
+ZOMBIE    VAR 0C08H
+SPAWNREQ  VAR 0C0AH
+SPAWNQ    VAR 0C0CH
+*
+*  ---- reset and interrupt vectors ------------------------------------------
+          ORG 0
+          /START
+          ORG 20H
+          /TICK
+*
+          ORG 100H
+*  ---- start-up (runs once; then becomes the idle task) ---------------------
+START     32512:HL
+          HL:SP
+          BANNER:HL
+          CALL(PRINT)
+          CALL(INITSTK)
+          TCB0:HL
+          HL:CURRENT
+          QUANTUM:A
+          A:QCOUNT
+*  A gets a double-length quantum (10 ticks = 100 ms), B a normal one, C the default.
+          TASKA:BC
+          10:E
+          CALL(SPAWN)
+          TASKB:BC
+          5:E
+          CALL(SPAWN)
+          TASKC:BC
+          0:E
+          CALL(SPAWN)
+*  All four TCB slots are now in use: a fourth SPAWN must fail with A = 1.
+          TASKD:BC
+          0:E
+          CALL(SPAWN)
+          A=1? (
+          FULLMSG:HL
+          CALL(PRTLINE)
+          )
+*
+*  The idle task: launch anything left in the mailbox, otherwise give the CPU away (HLT
+*  wakes on the next interrupt).
+IDLE      1:FI
+          SPAWNREQ:HL
+          H:A
+          A-*L:A
+          FZ=1? /IDLE2
+          H:B
+          L:C
+          SPAWNQ:A
+          A:E
+          0:HL
+          HL:SPAWNREQ
+          CALL(SPAWN)
+IDLE2     WAIT
+          CALL(YIELD)
+          /IDLE
+*
+*  ---- the timer interrupt: the preemptive context switch -------------------
+*  Entered by RST 4 with interrupts disabled; the interrupted PC is on the task's stack.
+TICK      A:STK
+          BC:STK
+          DE:STK
+          HL:STK
+          TICKS:HL
+          HL+1:HL
+          HL:TICKS
+          QCOUNT:A
+          A-1:A
+          A:QCOUNT
+          FZ=1? /SWITCH
+*  Quantum not used up: resume the same task.
+          STK:HL
+          STK:DE
+          STK:BC
+          STK:A
+          1:FI
+          RTN
+*
+*  YIELD: give up the rest of this task's quantum.  Same frame as the interrupt path.
+YIELD     0:FI
+          A:STK
+          BC:STK
+          DE:STK
+          HL:STK
+*  fall into SWITCH
+*
+*  SWITCH: the task's context is on its stack.  Save SP in its TCB, then schedule.
+SWITCH    0:HL
+          HL+SP:HL
+          DE:HL/HL:DE
+          CURRENT:HL
+          4:BC
+          HL+BC:HL
+          E:(HL)
+          HL+1:HL
+          D:(HL)
+*  fall into SCHED
+*
+*  SCHED: choose the next READY task after CURRENT (round-robin), run it.  The idle task
+*  is always READY, so this always finds one.  Blocked, new and zombie tasks are skipped.
+SCHED     CURRENT:HL
+SCNEXT    2:DE
+          HL+DE:HL
+          (HL):E
+          HL+1:HL
+          (HL):D
+          DE:HL/HL:DE
+          (HL):A
+          A=1? /SCGO
+          /SCNEXT
+SCGO      HL:CURRENT
+*  C = this task's quantum (BC is overwritten when its context is popped below).
+          10:DE
+          HL+DE:HL
+          (HL):C
+          CURRENT:HL
+          4:DE
+          HL+DE:HL
+          (HL):E
+          HL+1:HL
+          (HL):D
+          DE:HL/HL:DE
+          HL:SP
+*  Now running on the new task's stack: safe to recycle an exited task's stack.
+          CALL(REAP)
+          C:A
+          A:QCOUNT
+          STK:HL
+          STK:DE
+          STK:BC
+          STK:A
+          1:FI
+          RTN
+*
+*  ---- SYSEXIT: reached when a task RETurns from its top level --------------
+*  Park the TCB as a zombie and schedule; the stack is reclaimed by REAP once the CPU has
+*  left it.
+SYSEXIT   0:FI
+          CURRENT:HL
+          4:A
+          A:(HL)
+          HL:ZOMBIE
+          /SCHED
+*
+*  REAP: if a task exited, return its stack block to the pool and free its TCB slot.
+*  Runs inside SCHED (interrupts already off), on the next task's stack.
+REAP      ZOMBIE:HL
+          H:A
+          A-*L:A
+          FZ=1? RTN
+          HL:STK
+          6:DE
+          HL+DE:HL
+          (HL):E
+          HL+1:HL
+          (HL):D
+          DE:HL/HL:DE
+          CALL(STKFREE)
+          STK:HL
+          0:A
+          A:(HL)
+          0:HL
+          HL:ZOMBIE
+          RTN
+*
+*  ---- the stack pool ---------------------------------------------------------
+*  INITSTK: chain all NSTK blocks into the free list (start-up only).
+INITSTK   0:HL
+          HL:FREESTK
+          POOLEND:DE
+          NSTK:B
+ISLOOP    0FF80H:HL
+          HL+DE:HL
+          DE:HL/HL:DE
+          FREESTK:HL
+          L:A
+          A:(DE)
+          DE+1:DE
+          H:A
+          A:(DE)
+          DE-1:DE
+          DE:HL/HL:DE
+          HL:FREESTK
+          DE:HL/HL:DE
+          B-1:B
+          FZ=0? /ISLOOP
+          RTN
+*
+*  STKALLOC: take a block off the free list.  Returns HL = block, or HL = 0 if none.
+*  The caller must have interrupts off.
+STKALLOC  FREESTK:HL
+          H:A
+          A-*L:A
+          FZ=1? RTN
+          (HL):E
+          HL+1:HL
+          (HL):D
+          HL-1:HL
+          DE:HL/HL:DE
+          HL:FREESTK
+          DE:HL/HL:DE
+          RTN
+*
+*  STKFREE: push the block at HL back on the free list.  The caller must have interrupts
+*  off.
+STKFREE   DE:HL/HL:DE
+          FREESTK:HL
+          L:A
+          A:(DE)
+          DE+1:DE
+          H:A
+          A:(DE)
+          DE-1:DE
+          DE:HL/HL:DE
+          HL:FREESTK
+          RTN
+*
+*  ---- SPAWN: BC = the subroutine to run as a new task ---------------------------
+*  Returns A = 0, HL = the TCB; or A = 1, HL = 0 (no free stack or no free TCB slot).
+SPAWN     DE:STK
+          BC:STK
+          0:FI
+          CALL(STKALLOC)
+          1:FI
+          H:A
+          A-*L:A
+          FZ=1? /SPNOSTK
+          HL:STK
+          CALL(TCBCLAIM)
+          H:A
+          A-*L:A
+          FZ=1? /SPNOTCB
+*  Record the stack block (+6), the entry point (+8) and the quantum (+10) in the claimed
+*  TCB.  The stack now holds the TCB above the caller's E (the quantum, in C when popped).
+          STK:DE
+          STK:BC
+          HL:STK
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          E:(HL)
+          HL+1:HL
+          D:(HL)
+          HL+1:HL
+          C:(HL)
+          HL+1:HL
+          B:(HL)
+          HL+1:HL
+          STK:DE
+          STK:BC
+          C:A
+          0:FC<F>
+          FZ=0? /SPQSET
+          QUANTUM:C
+SPQSET    C:(HL)
+          DE:HL/HL:DE
+          CALL(FRAMEBLD)
+          0:A
+          RTN
+SPNOTCB   0:FI
+          STK:HL
+          CALL(STKFREE)
+          1:FI
+SPNOSTK   STK:BC
+          STK:DE
+          0:HL
+          1:A
+          RTN
+*
+*  SETQUANT: HL = a TCB, A = the task's new quantum in ticks (0 = the default).  A single
+*  byte store, so it needs no DI.  Clobbers A, DE, HL.
+SETQUANT  0:FC<F>
+          FZ=0? /SQSET2
+          QUANTUM:A
+SQSET2    10:DE
+          HL+DE:HL
+          A:(HL)
+          RTN
+*
+*  TCBCLAIM: find a free TCB slot and mark it NEW (3).  Returns HL = the slot, or 0.
+*  Interrupts are off only for the test-and-set of each single slot.
+TCBCLAIM  TCB0:HL
+          NTASK:C
+          16:DE
+CLLOOP    0:FI
+          (HL):A
+          0:FC<F>
+          FZ=0? /CLBUSY
+          3:A
+          A:(HL)
+          1:FI
+          RTN
+CLBUSY    1:FI
+          HL+DE:HL
+          C-1:C
+          FZ=0? /CLLOOP
+          0:HL
+          RTN
+*
+*  FRAMEBLD: HL = a NEW TCB whose +6 holds its stack block and +8 its entry point.  Primes
+*  the stack exactly as a context switch would have left it:
+*      SP -> L,H  E,D  C,B  flags,A   entry   SYSEXIT
+*  then records SP and finally marks the task READY.  Runs with interrupts ENABLED: nothing
+*  else can touch this TCB or stack until the last store makes the task runnable.
+FRAMEBLD  HL:STK
+          6:DE
+          HL+DE:HL
+          (HL):E
+          HL+1:HL
+          (HL):D
+          HL+1:HL
+          (HL):C
+          HL+1:HL
+          (HL):B
+          116:HL
+          HL+DE:HL
+          HL:STK
+          0:A
+          A:(HL)
+          HL+1:HL
+          A:(HL)
+          HL+1:HL
+          A:(HL)
+          HL+1:HL
+          A:(HL)
+          HL+1:HL
+          A:(HL)
+          HL+1:HL
+          A:(HL)
+          HL+1:HL
+          2:A
+          A:(HL)
+          HL+1:HL
+          0:A
+          A:(HL)
+          HL+1:HL
+          C:(HL)
+          HL+1:HL
+          B:(HL)
+          HL+1:HL
+          SYSEXIT:DE
+          E:(HL)
+          HL+1:HL
+          D:(HL)
+          STK:DE
+          STK:HL
+          H:B
+          L:C
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          HL+1:HL
+          E:(HL)
+          HL+1:HL
+          D:(HL)
+          B:H
+          C:L
+          1:A
+          A:(HL)
+          RTN
+*
+*  ---- semaphores: A = the semaphore number ---------------------------------------
+*  WAITSEM and SIGNALSEM preserve BC and DE (a task may keep a counter in B); they clobber
+*  only A, HL and the flags.  The real work is in WAITSEM1 / SIGNALS1.
+WAITSEM   BC:STK
+          DE:STK
+          CALL(WAITSEM1)
+          STK:DE
+          STK:BC
+          RTN
+*
+SIGNALSEM BC:STK
+          DE:STK
+          CALL(SIGNALS1)
+          STK:DE
+          STK:BC
+          RTN
+*
+*  SEMPTR: HL = the address of semaphore A (clobbers A, DE).
+SEMPTR    A:E
+          0:D
+          SEMBASE:HL
+          HL+DE:HL
+          HL+DE:HL
+          RTN
+*
+*  WAITSEM: acquire.  If free, take it.  Otherwise block (status 2, remembering which
+*  semaphore) and switch away; SIGNALSEM wakes us already owning it (FIFO handoff).
+WAITSEM1  0:FI
+          A:B
+          CALL(SEMPTR)
+          (HL):A
+          A=1? /WSACQ
+          HL+1:HL
+          (HL):A
+          A+1:A
+          A:(HL)
+          CURRENT:HL
+          2:A
+          A:(HL)
+          HL+1:HL
+          B:(HL)
+          CALL(YIELD)
+          RTN
+WSACQ     0:A
+          A:(HL)
+          1:FI
+          RTN
+*
+*  SIGNALSEM: release.  With nobody waiting, mark it free.  Otherwise leave it held and
+*  make the first task found blocked on it READY: ownership passes straight to that task.
+SIGNALS1  0:FI
+          A:B
+          CALL(SEMPTR)
+          HL+1:HL
+          (HL):A
+          0:FC<F>
+          FZ=1? /SGFREE
+          A-1:A
+          A:(HL)
+*  Scan the ring starting just AFTER the signalling task, so waiters are served in rotation
+*  (a scan from slot 0 every time would let two tasks pass the lock between themselves
+*  forever and starve the third).
+          CURRENT:HL
+          NTASK:C
+SGLOOP    2:DE
+          HL+DE:HL
+          (HL):E
+          HL+1:HL
+          (HL):D
+          DE:HL/HL:DE
+          (HL):A
+          A=2? /SGCHK
+SGNEXT    C-1:C
+          FZ=0? /SGLOOP
+          B:A
+          CALL(SEMPTR)
+          1:A
+          A:(HL)
+          1:FI
+          RTN
+SGCHK     HL+1:HL
+          (HL):A
+          HL-1:HL
+          A=B? /SGWAKE
+          /SGNEXT
+SGWAKE    1:A
+          A:(HL)
+          1:FI
+          RTN
+SGFREE    HL-1:HL
+          1:A
+          A:(HL)
+          1:FI
+          RTN
+*
+*  ---- output ----------------------------------------------------------------
+*  PUTCH: send the character in C (waits for the transmitter; preemptible).
+PUTCH     PORT(SERSTAT):A
+          A+*TXRDY:A
+          FZ=1? /PUTCH
+          C:A
+          A:PORT(SERDATA)
+          RTN
+*
+*  BURN: waste about 3600 cycles, so a line takes long enough to span a time slice and the
+*  semaphore is actually tested.
+BURN      150:DE
+BURNL     DE-1:DE
+          D:A
+          A-*E:A
+          FZ=0? /BURNL
+          RTN
+*
+*  PRINT: send the NUL-terminated string at HL, slowly.
+PRINT     (HL):A
+          0:FC<F>
+          FZ=1? RTN
+          A:C
+          CALL(PUTCH)
+          CALL(BURN)
+          HL+1:HL
+          /PRINT
+*
+*  PRTLINE: print the string at HL as one uninterrupted line, under semaphore PRTSEM.
+*  LOCKFLAG (0 = off) lets a test switch the lock off to show what it prevents.
+PRTLINE   HL:STK
+          LOCKFLAG:A
+          0:FC<F>
+          FZ=1? /PLRAW
+          PRTSEM:A
+          CALL(WAITSEM)
+          STK:HL
+          CALL(PRINT)
+          PRTSEM:A
+          /SIGNALSEM
+PLRAW     STK:HL
+          /PRINT
+*
+*  ---- the demo tasks -----------------------------------------------------------
+TASKA     MSGA:HL
+          CALL(PRTLINE)
+          /TASKA
+*
+TASKB     MSGB:HL
+          CALL(PRTLINE)
+          /TASKB
+*
+*  TASKC prints three lines and then simply RETurns: SYSEXIT frees its slot and stack.
+TASKC     3:B
+TCLOOP    MSGC:HL
+          CALL(PRTLINE)
+          B-1:B
+          FZ=0? /TCLOOP
+          RTN
+*
+TASKD     RTN
+*
+*  ---- data ---------------------------------------------------------------------
+BANNER    DB "MOL80 monitor: 3 tasks", 13, 10, 0
+FULLMSG   DB "task pool full", 13, 10, 0
+MSGA      DB "AAAAAAAAAAAAAAAAAAAA", 13, 10, 0
+MSGB      DB "BBBBBBBBBBBBBBBBBBBB", 13, 10, 0
+MSGC      DB "CCCCCCCCCC", 13, 10, 0
+MSGE      DB "EEEEEEEEEE", 13, 10, 0
+*
+*  The TCB ring: slot 0 (the idle/boot context) is ready; slots 1..3 start free.
+*  Per slot:  status, wait-id | NEXT | saved SP | stack block | entry | quantum | spare
+          ORG 0800H
+          DB 1, 0
+          DW TCB1, 0, 0, 0, QUANTUM, 0, 0
+          DB 0, 0
+          DW TCB2, 0, 0, 0, QUANTUM, 0, 0
+          DB 0, 0
+          DW TCB3, 0, 0, 0, QUANTUM, 0, 0
+          DB 0, 0
+          DW TCB0, 0, 0, 0, QUANTUM, 0, 0
+*
+*  Variable defaults: the print lock is on.
+          ORG 0C00H
+          DB 1
+*  Semaphore 0 (the print lock) starts free: value 1, no waiters.
+          ORG 0C10H
+          DB 1, 0
+*
+*  TASKE lives at a fixed address (0E00H) so a test can launch it through SPAWNREQ.
+*  It raises its own quantum to 20 ticks with SETQUANT, prints two lines and returns.
+          ORG 0E00H
+TASKE     CURRENT:HL
+          20:A
+          CALL(SETQUANT)
+          2:B
+TELOOP    MSGE:HL
+          CALL(PRTLINE)
+          B-1:B
+          FZ=0? /TELOOP
+          RTN

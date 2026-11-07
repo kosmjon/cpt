@@ -45,6 +45,19 @@
     - _Requirements: 4.1_
   - [x] 5.5 Parse `cond ? ( body )` conditional blocks (multi-line body as a line sequence; flag and compare conditions).
     - _Requirements: 4.2, 4.4_
+    - **[VERIFY] the multi-line block body is probably NOT legal MOL80.** We currently accept a
+      body that spans several source lines, e.g.
+      ```
+      A=1? (
+      FULLMSG:HL
+      CALL(PRTLINE)
+      )
+      ```
+      (used this way in `monitor/monitor.mol`). The user believes real MOL80 required the whole
+      `cond ? ( ... )` to be on **one line**. Do not change the parser yet; when confirmed,
+      restrict blocks to a single line (or whatever the manual specifies) and rewrite the
+      multi-line uses in `monitor/monitor.mol` and anywhere else. Add to the checklist item 7
+      (conditional-block nesting / else form).
   - [x] 5.6 Error recovery to next line so multiple errors report in one run.
     - _Requirements: 6.6, 7.2_
 

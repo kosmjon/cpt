@@ -181,6 +181,16 @@
         1-bit output in a timed loop (melodies imply toggling the bit under software timing), vs.
         a programmable timer/divisor chip given a frequency. Model whichever it was; if it is a
         divider, expose the divisor register.
+  - [ ] 8d.2b **Open question: how many voices?** The audio system could play Bach's Two-Part
+        Invention in F major, which may mean **two independent tone channels**, or may be
+        **one channel with the voices alternated** by software, or **one 1-bit output mixed in
+        software** by the CPU (see checklist P3). Do not commit to a design until the source
+        shows it. The 8d.1 capture design is deliberately method-neutral: every write is
+        recorded with its CPU-cycle timestamp, so the waveform can be reconstructed for any of
+        the three. If it is two channels, the device gains a second port/register and the audio
+        output sums two tones; if alternation or software mixing, no device change is needed.
+        Once playback is working, replaying the Two-Part Invention is a natural acceptance test
+        (checklist P4 for the music data format).
   - [ ] 8d.3 Web UI: turn the captured bit-stream / tone events into audio via the Web Audio
         API. Headless/`cpt-run`: no audio, just record events (for tests and trace).
   - [ ] 8d.4 Tests: writes are captured with correct timing; a square-wave toggle at a known

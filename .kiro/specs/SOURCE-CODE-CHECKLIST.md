@@ -29,7 +29,10 @@ Status tags used in the specs:
       (Note: I/O via `A:PORT(n)`/`PORT(n):A` is CONFIRMED from the scan, not a placeholder.)
 - [ ] 6. Inline-comment start column (currently disabled; `*` full-line comments are CONFIRMED
       and likely also the block/header-comment form — confirm whether there is anything more).
-- [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists.
+- [ ] 7. Whether `?` conditional blocks nest; whether an "else" form exists; and whether a
+      `cond ? ( ... )` block may span **multiple source lines**. We currently accept a multi-line
+      body, but the user believes MOL80 required the whole construct on **one line**. Confirm,
+      then restrict the parser and fix the multi-line uses in `monitor/monitor.mol`.
 - [x] 8. The full table: MOL80 mnemonic ↔ opcode byte ↔ standard 8080 — CONFIRMED from the
       scan for every opcode MOL80 uses (EI/DI, rotates, DAA/CMA/STC/CMC, NOP/HLT as
       `PAUSE`/`WAIT`, ORA A/XRA A as `0:FC<F>`/`0:A`, LDAX/STAX, XTHL, RST as `CALL(0..7)`,
@@ -155,10 +158,26 @@ Status tags used in the specs:
       and the timer (task 8c) coexist. Their individual frequencies/vectors remain [VERIFY] (T1).
 
 ### Speaker / tone output
-- [ ] P1. The output port that drives the speaker.
+- [ ] P1. The output port(s) that drive the speaker (one or more).
 - [ ] P2. Generation method: 1-bit output **bit-banged** by the CPU in a timed loop, vs. a
       programmable timer/divisor chip given a frequency (melody playback suggests the former).
       If a divider, its register layout.
+- [ ] P3. **Number of audio voices.** The audio system could be programmed to play J.S. Bach's
+      Two-Part Invention in F major, which raises the question of whether there were two
+      independent channels. Three possibilities, each leaving a different signature in the
+      source:
+      - (a) **Two tone channels** (two frequency generators/divisors summed into the speaker):
+            two frequency registers or two speaker ports; a note step writes two values.
+      - (b) **One channel, voices alternated** by software at a rapid rate (the pitch is
+            swapped between the two voices so they blend): a loop that flips pitch values on
+            a counter. Needs a timing source far faster than the 100 Hz task timer.
+      - (c) **One 1-bit output, software-mixed** by the CPU in a tight timed loop that
+            computes the combined square wave: a loop toggling one bit with computed delays;
+            plausibly holds the CPU for the duration, which sits oddly with the multitasking
+            monitor.
+- [ ] P4. The **music data format**: how a melody/two-part piece is encoded (note table;
+      duration; one entry per voice per step?). Also a likely source of the answer to P3, and a
+      way to confirm playback by replaying a known piece (the Two-Part Invention).
 
 ### Timing & misc
 - [ ] B1. 8080 vs. 8085 details, clock speed, interrupt sources, cycle-accuracy target.
