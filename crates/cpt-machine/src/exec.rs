@@ -24,10 +24,16 @@ impl Executive {
         let cycles = self.cpu.step(&mut self.machine);
         self.machine.tick_devices(cycles);
 
-        // Deliver at most one interrupt per step. `Cpu::interrupt` itself checks int_enabled
-        // and returns false if disabled; it also wakes the CPU from HLT.
-        if let Some(vector) = self.machine.poll_irq() {
-            self.cpu.interrupt(vector, &mut self.machine);
+        // Deliver at most one interrupt per step, and only when the CPU will accept it. The
+        // 8080's INT line is level-sensitive: a device keeps requesting until it is
+        // acknowledged, so a request that arrives while interrupts are disabled (inside a
+        // handler, or after DI) must stay pending, not be consumed and dropped. Two periodic
+        // sources (retrace 60 Hz, task timer 100 Hz) land on the same step every few frames,
+        // so dropping would silently lose ticks. `Cpu::interrupt` also wakes the CPU from HLT.
+        if self.cpu.int_enabled {
+            if let Some(vector) = self.machine.poll_irq() {
+                self.cpu.interrupt(vector, &mut self.machine);
+            }
         }
         cycles
     }

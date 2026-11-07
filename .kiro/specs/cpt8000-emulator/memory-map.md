@@ -7,3 +7,12 @@ interrupt vectors
 0028 RST5
 0030 RST6
 0038 RST7
+
+
+## Interrupts
+* Disk I/O
+* Printer I/O
+* Keyboard Input 
+* Timer
+* Vertical retrace
+* Serial (RS-232) I/O

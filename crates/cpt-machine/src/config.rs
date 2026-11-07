@@ -51,6 +51,14 @@ pub struct MachineConfig {
     /// RST vector the vertical-retrace interrupt uses. [VERIFY]
     pub retrace_vector: u8,
 
+    /// CPU cycles between task-switch timer interrupts. The multitasking monitor's timer ran at
+    /// about 100 Hz and was **not programmable** (no ports): 2 MHz / 100 Hz = 20,000 cycles.
+    /// It is a separate interrupt from the display retrace. [CONFIRMED separate; VERIFY rate]
+    pub timer_period_cycles: u32,
+
+    /// RST vector the task-switch timer uses. [VERIFY]
+    pub timer_vector: u8,
+
     /// Base I/O port of the disk controller (it claims 5 consecutive ports). [VERIFY]
     pub disk_base_port: u8,
 
@@ -81,6 +89,9 @@ impl Default for MachineConfig {
             // ~2 MHz 8080 / 60 Hz ≈ 33,333 cycles per frame (placeholder). [VERIFY]
             retrace_period_cycles: 33_333,
             retrace_vector: 1, // [VERIFY] RST 1 placeholder
+            // ~2 MHz 8080 / 100 Hz = 20,000 cycles (placeholder clock). [VERIFY]
+            timer_period_cycles: 20_000,
+            timer_vector: 4, // [VERIFY] RST 4 placeholder (distinct from retrace/kbd/serial)
             disk_base_port: 0x50, // [VERIFY] placeholder: 5 ports 0x50..=0x54
             keyboard_base_port: 0x60, // [VERIFY] placeholder: STATUS 0x60, DATA 0x61
             keyboard_vector: 2, // [VERIFY] RST 2 placeholder

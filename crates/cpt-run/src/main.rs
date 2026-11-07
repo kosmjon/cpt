@@ -10,6 +10,7 @@
 //!   cpt-run --trace <file.bin>             Print a disassembled trace, one line per step.
 //!   cpt-run --load 0x0100 <file.bin>       Load (and start) at a given address.
 //!   cpt-run --steps 5000 <file.bin>        Cap the number of instructions.
+//!   cpt-run --timer <file.bin>             Attach the 100 Hz task-switch timer interrupt (RST 4).
 //!   cpt-run --serial-listen 127.0.0.1:2323 <file.bin>
 //!                                          Serial port as a Telnet server (the guest echoes;
 //!                                          add --serial-raw for a plain TCP byte pipe).
@@ -41,6 +42,9 @@ struct Options {
     serial: SerialMode,
     /// With `--serial-listen`: skip Telnet negotiation/filtering (for raw TCP clients).
     serial_raw: bool,
+    /// Attach the 100 Hz task-switch timer (off by default: a program that enables interrupts
+    /// without a handler at the timer's RST vector would run into page-zero garbage).
+    timer: bool,
     /// Disk image mounted in drive 1 / drive 2 (file-backed; writes persist on exit/flush).
     disk1: Option<String>,
     disk2: Option<String>,
@@ -58,6 +62,7 @@ fn parse_args() -> Result<Options, String> {
         max_steps: 1_000_000,
         serial: SerialMode::None,
         serial_raw: false,
+        timer: false,
         disk1: None,
         disk2: None,
     };
@@ -78,6 +83,7 @@ fn parse_args() -> Result<Options, String> {
                 );
             }
             "--serial-raw" => opts.serial_raw = true,
+            "--timer" => opts.timer = true,
             "--serial-connect" => {
                 i += 1;
                 opts.serial = SerialMode::Connect(
@@ -147,7 +153,7 @@ fn main() -> ExitCode {
             eprintln!("error: {}", e);
             eprintln!(
                 "usage: cpt-run [--trace] [--load <addr>] [--steps <n>] \
-                 [--serial-listen <addr> [--serial-raw]|--serial-connect <addr>] \
+                 [--serial-listen <addr> [--serial-raw]|--serial-connect <addr>] [--timer] \
                  [--disk1 <image>] [--disk2 <image>] <file.bin>"
             );
             return ExitCode::from(2);
@@ -178,6 +184,13 @@ fn main() -> ExitCode {
             cfg.retrace_period_cycles,
             cfg.retrace_vector,
         ));
+    }
+
+    if opts.timer {
+        machine.attach_device(Box::new(cpt_machine::TimerDevice::new(
+            cfg.timer_period_cycles,
+            cfg.timer_vector,
+        )));
     }
 
     // Disk drives: if either image was given, attach the controller and mount the images

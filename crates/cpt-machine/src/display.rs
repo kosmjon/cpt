@@ -123,10 +123,10 @@ pub struct DisplayDevice {
     retrace_vector: u8,
     cycle_accum: u32,
     retrace_pending: bool,
-    /// Count of retrace interrupts *raised* (consumed via `take_irq`). Note this counts IRQs
-    /// the device requested, not necessarily ones the CPU serviced: if the retrace handler runs
-    /// longer than one retrace period, interrupts raised while it executes (with interrupts
-    /// disabled) are not accepted by the CPU, so serviced scrolls can be fewer than this count.
+    /// Count of retrace interrupts delivered (consumed via `take_irq`, which the executive only
+    /// calls when the CPU accepts the interrupt). A retrace that arrives while interrupts are
+    /// disabled stays pending until they are enabled; if the handler runs longer than a whole
+    /// period, several retraces coalesce into one, so scrolls can be fewer than frames elapsed.
     pub retrace_count: u64,
 }
 

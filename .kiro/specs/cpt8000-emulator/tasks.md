@@ -147,6 +147,46 @@
     planned gap — native `cpt-run` with TCP covers the real use.
   - _Requirements: (serial port)_
 
+- [x] 8c. Timer interrupt device — done (100 Hz, non-programmable). The CPT monitor was **multitasking**, driven by a
+      periodic timer interrupt (recalled ~100 Hz) used to pre-empt/switch tasks. Unlike the
+      display retrace (cosmetic scrolling), this tick is load-bearing: the monitor's scheduler
+      depends on it.
+  - [x] 8c.1 `TimerDevice` (`cpt-machine/src/timer.rs`): a periodic IRQ on a configured RST
+        vector via the existing `tick`/`take_irq` mechanism. **100 Hz, not programmable**
+        (user-specified): no ports, no registers, no enable bit. `MachineConfig` gains
+        `timer_period_cycles` (20,000 = 100 Hz at the placeholder 2 MHz clock) and
+        `timer_vector` (RST 4 placeholder). Available in `cpt-run` with `--timer`; deliberately
+        not attached in the wasm demo (the demo enables interrupts with no RST-4 handler).
+        Frequency/vector remain [VERIFY].
+  - [x] 8c.1b Executive fix found by 8c.3: interrupts are now level-like. The executive polls
+        devices only while the CPU has interrupts enabled, so a request that arrives while
+        masked (inside a handler, or after DI) stays pending instead of being consumed and
+        dropped. Without this, retrace (33,333 cycles) and timer (20,000) coincide every ~100,000
+        cycles and the timer lost 20% of its ticks. Same-source ticks coalesce into one request.
+  - [ ] 8c.2 The task-switch timer is a **separate** interrupt from the display vertical
+        retrace (task 6.3) — **[CONFIRMED]**. Two independent periodic sources on distinct RST
+        vectors; both coexist. Only the timer's frequency and vector remain [VERIFY].
+  - [x] 8c.3 Tests (`cpt-machine/tests/timer.rs`, 8): fires exactly each period and not
+        before; 100 per second; pile-ups coalesce; no ports; a CPU handler counts ~100 ticks in
+        one second; timer (100 Hz) and retrace (60 Hz) fire independently on their own
+        vectors; a masked tick stays pending until EI; simultaneous sources are both serviced.
+  - _Requirements: 1.4, 1.5 (to be extended for the multitasking timer)_
+
+- [ ] 8d. Speaker / tone output device — planned. An output port drove a speaker for beeps and
+      tones, and could be programmed to play simple melodies.
+  - [ ] 8d.1 `SpeakerDevice` on an output port ([VERIFY] port). Capture the write stream with
+        timestamps (CPU cycle counts) so the waveform can be reconstructed regardless of
+        generation method.
+  - [ ] 8d.2 Determine the generation method from the source ([VERIFY]): CPU **bit-banging** a
+        1-bit output in a timed loop (melodies imply toggling the bit under software timing), vs.
+        a programmable timer/divisor chip given a frequency. Model whichever it was; if it is a
+        divider, expose the divisor register.
+  - [ ] 8d.3 Web UI: turn the captured bit-stream / tone events into audio via the Web Audio
+        API. Headless/`cpt-run`: no audio, just record events (for tests and trace).
+  - [ ] 8d.4 Tests: writes are captured with correct timing; a square-wave toggle at a known
+        rate produces the expected event stream.
+  - _Requirements: (speaker — to be added to requirements)_
+
 - [ ] 9b. System-image loader in `cpt-machine`
   - Load an image into bank 0 + all 32K blocks; set PC to the main entry point.
   - _Requirements: 7.6_

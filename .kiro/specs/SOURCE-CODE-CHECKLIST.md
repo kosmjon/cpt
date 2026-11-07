@@ -146,6 +146,20 @@ Status tags used in the specs:
 - [ ] F1. The I/O ports/commands the B-tree filer (Segment 12) source uses.
 - [ ] F2. The filer's sector/block model (determines the backing host-file layout).
 
+### Timer interrupt (multitasking monitor)
+- [ ] T1. Timer RST vector and exact frequency. Working assumption (implemented): 100 Hz,
+      **not programmable** (no ports), RST 4 placeholder, 2 MHz clock placeholder. Drives the
+      monitor's task switching.
+- [x] T2. The task-switch timer is a **separate** interrupt from the display vertical retrace —
+      CONFIRMED. Two independent periodic sources (distinct RST vectors); the retrace (task 6.3)
+      and the timer (task 8c) coexist. Their individual frequencies/vectors remain [VERIFY] (T1).
+
+### Speaker / tone output
+- [ ] P1. The output port that drives the speaker.
+- [ ] P2. Generation method: 1-bit output **bit-banged** by the CPU in a timed loop, vs. a
+      programmable timer/divisor chip given a frequency (melody playback suggests the former).
+      If a divider, its register layout.
+
 ### Timing & misc
 - [ ] B1. 8080 vs. 8085 details, clock speed, interrupt sources, cycle-accuracy target.
 - [ ] B2. Printer interface (Selectric-based?), if in scope.
