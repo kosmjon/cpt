@@ -199,8 +199,8 @@
         Audio square oscillator against the emulated clock. Triggered from the existing keys:
         **CODE + WORDPAK** starts `speaker/melody.mol` (host shortcut in the page; the key
         events still reach the machine). Verified natively (`cpt-wasm/tests/audio.rs`, 5) and in
-        Node against a mock audio context plus the real wasm (`web/check-audio.mjs`); NOT yet
-        exercised in a real browser.
+        Node against a mock audio context plus the real wasm (`web/check-audio.mjs`), and
+        confirmed working in a real browser by the user (CODE + WORDPAK plays the melody).
   - [x] 8d.4 Tests: `cpt-machine/tests/speaker.rs` (10: latch/commit, status, port claim,
         frequency maths, cycle stamps, 440 Hz renders 440 periods/s, silence, chunked == whole,
         WAV header, a CPU program driving the ports with exact cycle stamps) and

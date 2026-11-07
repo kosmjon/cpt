@@ -65,8 +65,7 @@ How it works:
 - `node crates/cpt-wasm/web/check-audio.mjs` checks the scheduling (against a mock audio
   context) and the real wasm melody end to end, with no browser.
 
-The page was not exercised in a real browser while building this; the browser-facing code is
-checked only through the Node script above.
+Confirmed working in a real browser (CODE + WORDPAK plays the melody).
 
 ## Notes
 
