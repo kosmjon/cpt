@@ -25,6 +25,7 @@ version = "0.1.0"
 dependencies = [
  "cpt-machine",
  "i8080-cpu",
+ "mol80asm",
 ]
 
 [[package]]

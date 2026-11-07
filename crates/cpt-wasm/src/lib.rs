@@ -16,7 +16,7 @@
 use cpt_machine::disk::Station;
 use cpt_machine::{
     DiskController, DiskImage, DisplayDevice, Executive, Geometry, KeyboardDevice, Machine,
-    MachineConfig,
+    MachineConfig, SpeakerDevice,
 };
 use i8080_cpu::Cpu;
 use std::cell::RefCell;
@@ -30,7 +30,13 @@ thread_local! {
     static PAGE: RefCell<Vec<u8>> = RefCell::new(vec![0u8; ROWS * COLS]);
     /// Scratch buffer for transferring disk bytes between JS and wasm (mount in / eject out).
     static XFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+    /// The speaker events produced by the most recent frame, as (cycle, divisor) f64 pairs.
+    /// Replaced every frame, so it never grows if the page ignores it.
+    static SPK: RefCell<Vec<f64>> = RefCell::new(Vec::new());
 }
+
+/// The speaker demo: a C-major scale and a beep, in MOL80, assembled at run time.
+const MELODY_SRC: &str = include_str!("../../../speaker/melody.mol");
 
 struct State {
     exec: Executive,
@@ -39,6 +45,10 @@ struct State {
     disk_dev: usize,
     /// Index of the keyboard device among the machine's devices.
     kbd_dev: usize,
+    /// Index of the speaker device among the machine's devices.
+    speaker_dev: usize,
+    cpu_clock_hz: u32,
+    tone_clock_hz: u32,
     geom: Geometry,
 }
 
@@ -49,6 +59,14 @@ impl State {
             .device_mut(self.disk_dev)?
             .as_any_mut()
             .downcast_mut::<DiskController>()
+    }
+
+    fn speaker(&mut self) -> Option<&mut SpeakerDevice> {
+        self.exec
+            .machine
+            .device_mut(self.speaker_dev)?
+            .as_any_mut()
+            .downcast_mut::<SpeakerDevice>()
     }
 
     fn keyboard(&mut self) -> Option<&mut KeyboardDevice> {
@@ -85,6 +103,12 @@ pub extern "C" fn cpt_init() {
         cfg.keyboard_base_port,
         cfg.keyboard_vector,
     )));
+    // Attach the one-channel speaker (guessed interface; see cpt-machine's speaker module).
+    let speaker_dev = machine.device_count();
+    machine.attach_device(Box::new(SpeakerDevice::new(
+        cfg.speaker_base_port,
+        cfg.speaker_tone_clock_hz,
+    )));
     machine.mem.load_bank0(0x0100, &cpt_machine::demo::display_demo());
 
     let mut cpu = Cpu::new();
@@ -97,9 +121,13 @@ pub extern "C" fn cpt_init() {
         cycles_per_frame: cfg.retrace_period_cycles as u64,
         disk_dev,
         kbd_dev,
+        speaker_dev,
+        cpu_clock_hz: cfg.cpu_clock_hz,
+        tone_clock_hz: cfg.speaker_tone_clock_hz,
         geom,
     };
     STATE.with(|s| *s.borrow_mut() = Some(state));
+    SPK.with(|b| b.borrow_mut().clear());
 }
 
 /// Run approximately one video frame of CPU cycles, then refresh the page buffer.
@@ -108,6 +136,16 @@ pub extern "C" fn cpt_run_frame() {
     STATE.with(|s| {
         if let Some(state) = s.borrow_mut().as_mut() {
             state.exec.run_cycles(state.cycles_per_frame);
+            // Hand this frame's speaker events to the page as (cycle, divisor) pairs.
+            let events = state.speaker().map(|s| s.take_events()).unwrap_or_default();
+            SPK.with(|b| {
+                let mut b = b.borrow_mut();
+                b.clear();
+                for e in &events {
+                    b.push(e.cycle as f64);
+                    b.push(e.divisor as f64);
+                }
+            });
             if let Some(d) = state.exec.machine.display_mut() {
                 let snap = d.snapshot();
                 PAGE.with(|p| {
@@ -147,6 +185,63 @@ pub extern "C" fn cpt_retraces() -> u64 {
             .as_mut()
             .and_then(|st| st.exec.machine.display_mut().map(|d| d.retrace_count))
             .unwrap_or(0)
+    })
+}
+
+// --- speaker ---
+//
+// Each frame `cpt_run_frame` leaves the speaker's new tone changes in a buffer of f64 pairs
+// (CPU cycle, divisor). The page schedules them on a Web Audio oscillator at the right
+// moments: cycle / cpu_hz seconds of emulated time. A divisor of 0 means silence.
+
+/// Number of speaker events produced by the most recent frame.
+#[no_mangle]
+pub extern "C" fn cpt_speaker_count() -> usize {
+    SPK.with(|b| b.borrow().len() / 2)
+}
+
+/// Pointer to the speaker event buffer: `cpt_speaker_count()` pairs of f64 (cycle, divisor).
+#[no_mangle]
+pub extern "C" fn cpt_speaker_ptr() -> *const f64 {
+    SPK.with(|b| b.borrow().as_ptr())
+}
+
+/// CPU clock in Hz, to convert event cycles to seconds.
+#[no_mangle]
+pub extern "C" fn cpt_cpu_hz() -> f64 {
+    STATE.with(|s| s.borrow().as_ref().map(|st| st.cpu_clock_hz as f64).unwrap_or(0.0))
+}
+
+/// The speaker divider's clock in Hz: tone frequency = this / (2 * divisor).
+#[no_mangle]
+pub extern "C" fn cpt_tone_hz() -> f64 {
+    STATE.with(|s| s.borrow().as_ref().map(|st| st.tone_clock_hz as f64).unwrap_or(0.0))
+}
+
+/// Total CPU cycles run so far (exact as an f64 for centuries of emulated time).
+#[no_mangle]
+pub extern "C" fn cpt_cycle_now() -> f64 {
+    STATE.with(|s| s.borrow().as_ref().map(|st| st.exec.cpu.cycles as f64).unwrap_or(0.0))
+}
+
+/// Start the speaker demo (a C-major scale and a beep, from `speaker/melody.mol`): assemble it,
+/// load it, and restart the CPU on it with interrupts off. The display, disks and keyboard are
+/// left as they are; the demo just stops the screen demo's CPU program. Returns 1 on success.
+#[no_mangle]
+pub extern "C" fn cpt_play_melody() -> u32 {
+    let out = mol80asm::assemble_source("melody.mol", MELODY_SRC);
+    let Some(asm) = out.assembly else { return 0 };
+    STATE.with(|s| {
+        let mut sref = s.borrow_mut();
+        let Some(st) = sref.as_mut() else { return 0 };
+        st.exec.machine.mem.load_bank0(asm.origin, &asm.bytes);
+        // A fresh CPU: pc = the reset vector, interrupts off, so the demo's HLT is terminal.
+        let mut cpu = Cpu::new();
+        cpu.pc = asm.origin;
+        cpu.sp = 0x7F00;
+        cpu.cycles = st.exec.cpu.cycles; // keep the cycle clock monotonic for the speaker
+        st.exec.cpu = cpu;
+        1
     })
 }
 

@@ -13,3 +13,5 @@ path = "src/lib.rs"
 [dependencies]
 i8080-cpu = { path = "../i8080-cpu" }
 cpt-machine = { path = "../cpt-machine" }
+# The speaker demo melody is MOL80 source assembled in the module at run time.
+mol80asm = { path = "../../mol80asm" }

@@ -15,6 +15,7 @@ pub mod exec;
 pub mod keyboard;
 pub mod memory;
 pub mod serial;
+pub mod speaker;
 pub mod timer;
 
 pub use config::{BankSelectEncoding, MachineConfig};
@@ -24,6 +25,7 @@ pub use disk_controller::DiskController;
 pub use display::{DisplayDevice, Layout, PageSnapshot, COLS, ROWS};
 pub use keyboard::KeyboardDevice;
 pub use serial::{pump as serial_pump, LoopbackTransport, SerialDevice, Transport};
+pub use speaker::{wav_bytes, SpeakerDevice, SpeakerEvent, ToneRenderer};
 pub use timer::TimerDevice;
 pub use exec::Executive;
 pub use memory::{BankedMemory, BANK1_BASE, BANK_SIZE};

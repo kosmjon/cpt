@@ -40,14 +40,18 @@ async function main() {
   // --- disk drives ---
   const drives = setupDrives(w);
 
+  // --- speaker: live playback through the Web Audio API ---
+  const speaker = setupSpeaker(w);
+
   // --- special-key cluster ---
-  setupSpecialKeys(w);
+  setupSpecialKeys(w, speaker);
 
   // --- real PC keyboard for the non-special (typewriter) keys ---
   setupHostKeyboard(w);
 
   function render() {
     w.cpt_run_frame();
+    speaker.onFrame();
     const page = readPage();
 
     // Page-white: pale background, dark text.
@@ -82,6 +86,32 @@ async function main() {
   }
 
   requestAnimationFrame(render);
+}
+
+// The speaker: schedules the machine's tone changes on a Web Audio oscillator, and starts the
+// demo melody when asked (CODE + WORDPAK).
+function setupSpeaker(w) {
+  const audio = new SpeakerAudio(
+    window.AudioContext || window.webkitAudioContext,
+    w.cpt_cpu_hz(),
+    w.cpt_tone_hz(),
+  );
+  return {
+    // Called once per frame, right after the machine has run: hand over its new tone changes.
+    onFrame() {
+      const n = w.cpt_speaker_count();
+      if (n > 0) audio.schedule(new Float64Array(w.memory.buffer, w.cpt_speaker_ptr(), n * 2), n);
+    },
+    // Turn sound on (this must be inside a click) and start the melody.
+    playMelody() {
+      if (!audio.enable()) {
+        document.getElementById("status").textContent = "this browser has no Web Audio";
+        return;
+      }
+      audio.reanchor();
+      w.cpt_play_melody();
+    },
+  };
 }
 
 // Wire the two 8-inch drives. Each has one vertical button with a red activity LED. The
@@ -208,7 +238,7 @@ function releaseLatchedMods(w) {
   latchedMods.length = 0;
 }
 
-function setupSpecialKeys(w) {
+function setupSpecialKeys(w, speaker) {
   const grid = document.getElementById("specialKeys");
   if (!grid) return;
 
@@ -260,10 +290,17 @@ function setupSpecialKeys(w) {
         key.addEventListener("click", () => {
           key.classList.add("pressed");
           setTimeout(() => key.classList.remove("pressed"), 90);
+          // CODE + WORDPAK is a host shortcut: it starts the speaker demo. The key events
+          // below still reach the machine as usual. (This click is also the user gesture that
+          // browsers require before they will play any audio.)
+          if (spec.t === "WORDPAK" && latchedMods.some((m) => m.el && m.el.dataset.label === "CODE")) {
+            speaker.playMelody();
+          }
           w.cpt_key_down(code);
           w.cpt_key_up(code);
           releaseLatchedMods(w);
         });
+        if (spec.t === "WORDPAK") key.title = "CODE + WORDPAK: play the speaker demo";
       }
       grid.appendChild(key);
     }

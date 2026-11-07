@@ -174,27 +174,39 @@
 
 - [ ] 8d. Speaker / tone output device — planned. An output port drove a speaker for beeps and
       tones, and could be programmed to play simple melodies.
-  - [ ] 8d.1 `SpeakerDevice` on an output port ([VERIFY] port). Capture the write stream with
-        timestamps (CPU cycle counts) so the waveform can be reconstructed regardless of
-        generation method.
-  - [ ] 8d.2 Determine the generation method from the source ([VERIFY]): CPU **bit-banging** a
-        1-bit output in a timed loop (melodies imply toggling the bit under software timing), vs.
-        a programmable timer/divisor chip given a frequency. Model whichever it was; if it is a
-        divider, expose the divisor register.
-  - [ ] 8d.2b **Open question: how many voices?** The audio system could play Bach's Two-Part
-        Invention in F major, which may mean **two independent tone channels**, or may be
-        **one channel with the voices alternated** by software, or **one 1-bit output mixed in
-        software** by the CPU (see checklist P3). Do not commit to a design until the source
-        shows it. The 8d.1 capture design is deliberately method-neutral: every write is
-        recorded with its CPU-cycle timestamp, so the waveform can be reconstructed for any of
-        the three. If it is two channels, the device gains a second port/register and the audio
-        output sums two tones; if alternation or software mixing, no device change is needed.
-        Once playback is working, replaying the Two-Part Invention is a natural acceptance test
-        (checklist P4 for the music data format).
-  - [ ] 8d.3 Web UI: turn the captured bit-stream / tone events into audio via the Web Audio
-        API. Headless/`cpt-run`: no audio, just record events (for tests and trace).
-  - [ ] 8d.4 Tests: writes are captured with correct timing; a square-wave toggle at a known
-        rate produces the expected event stream.
+  - [x] 8d.1 `SpeakerDevice` (`cpt-machine/src/speaker.rs`) on two output ports, a **guess**:
+        port 0x80 = divisor low byte (latched), port 0x81 = divisor high byte (commits
+        `{high, low}` and starts the tone), tone = `tone_clock / (2 * divisor)` with the tone
+        clock a 1 MHz placeholder (A440 = divisor 1136); divisor 0 = silence; status read of
+        port 0x80 bit 0 = sounding. Every commit is captured as a `SpeakerEvent { cycle, divisor }`
+        stamped with the CPU cycle. `MachineConfig` gains `speaker_base_port`,
+        `speaker_tone_clock_hz` and `cpu_clock_hz`. All of it [VERIFY].
+  - [~] 8d.2 Generation method: built as a **programmable divider** by guess (it suits a
+        multitasking monitor, since a note plays on its own and frees the CPU). Still [VERIFY]
+        against the source: if the real board had the CPU toggle a 1-bit output in a timed loop
+        instead, replace the register interface in `speaker.rs`; the event capture, renderer
+        and WAV output do not change.
+  - [x] 8d.2b **Voices: ONE channel** (user-confirmed). The speaker is a single tone output for
+        beeps and tones. The Bach two-part invention was a software trick on a special demo
+        disk (one channel faking two voices by alternation / software mixing), not two tone
+        generators, so the device models one output and the capture design above already covers
+        it. No second port/register.
+  - [x] 8d.3 Output. `ToneRenderer` (streaming events to 16-bit mono PCM, phase kept across
+        calls, so chunked and one-shot rendering are identical), `wav_bytes`, and
+        `cpt-run --speaker-wav out.wav` (writes everything the program played to a 22.05 kHz
+        WAV). **Live web playback:** the wasm module attaches the speaker, hands the page each
+        frame's (cycle, divisor) events, and `web/speaker-audio.js` schedules them on a Web
+        Audio square oscillator against the emulated clock. Triggered from the existing keys:
+        **CODE + WORDPAK** starts `speaker/melody.mol` (host shortcut in the page; the key
+        events still reach the machine). Verified natively (`cpt-wasm/tests/audio.rs`, 5) and in
+        Node against a mock audio context plus the real wasm (`web/check-audio.mjs`); NOT yet
+        exercised in a real browser.
+  - [x] 8d.4 Tests: `cpt-machine/tests/speaker.rs` (10: latch/commit, status, port claim,
+        frequency maths, cycle stamps, 440 Hz renders 440 periods/s, silence, chunked == whole,
+        WAV header, a CPU program driving the ports with exact cycle stamps) and
+        `cpt-run/tests/speaker.rs` (4: `speaker/melody.mol` plays nine notes at the right
+        divisors, length and pitch, and `--speaker-wav` writes a ~2.5 s WAV).
+  - [x] 8d.5 Demo: `speaker/melody.mol`, a C-major scale and a beep in MOL80.
   - _Requirements: (speaker — to be added to requirements)_
 
 - [ ] 9b. System-image loader in `cpt-machine`

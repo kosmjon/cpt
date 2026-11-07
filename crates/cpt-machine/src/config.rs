@@ -59,6 +59,17 @@ pub struct MachineConfig {
     /// RST vector the task-switch timer uses. [VERIFY]
     pub timer_vector: u8,
 
+    /// CPU clock in Hz. Used only to convert CPU cycles to time for audio rendering; the
+    /// interrupt periods above are already expressed in cycles. [VERIFY] (2 MHz placeholder)
+    pub cpu_clock_hz: u32,
+
+    /// Base I/O port of the speaker (2 consecutive ports: divisor low, divisor high). One
+    /// channel only. The whole interface is a guess; see `speaker.rs`. [VERIFY]
+    pub speaker_base_port: u8,
+
+    /// Clock the speaker's divider counts, in Hz (tone = clock / (2 * divisor)). [VERIFY]
+    pub speaker_tone_clock_hz: u32,
+
     /// Base I/O port of the disk controller (it claims 5 consecutive ports). [VERIFY]
     pub disk_base_port: u8,
 
@@ -92,6 +103,9 @@ impl Default for MachineConfig {
             // ~2 MHz 8080 / 100 Hz = 20,000 cycles (placeholder clock). [VERIFY]
             timer_period_cycles: 20_000,
             timer_vector: 4, // [VERIFY] RST 4 placeholder (distinct from retrace/kbd/serial)
+            cpu_clock_hz: 2_000_000, // [VERIFY] placeholder
+            speaker_base_port: 0x80, // [VERIFY] placeholder: divisor low 0x80, high 0x81
+            speaker_tone_clock_hz: 1_000_000, // [VERIFY] placeholder: 440 Hz = divisor 1136
             disk_base_port: 0x50, // [VERIFY] placeholder: 5 ports 0x50..=0x54
             keyboard_base_port: 0x60, // [VERIFY] placeholder: STATUS 0x60, DATA 0x61
             keyboard_vector: 2, // [VERIFY] RST 2 placeholder

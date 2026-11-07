@@ -1,0 +1,58 @@
+* ===========================================================================
+*  Speaker demo in MOL80: a C-major scale and a high beep, played on the (guessed) one-channel
+*  speaker.  See crates/cpt-machine/src/speaker.rs for the port interface:
+*      port 128  divisor LOW byte   (latched only)
+*      port 129  divisor HIGH byte  (commits {high, low} and starts the tone)
+*      tone frequency = 1,000,000 / (2 * divisor) Hz;  divisor 0 = silence
+*
+*  Hear it:
+*      cargo run -q -p mol80asm -- --bin speaker/melody.bin speaker/melody.mol
+*      cargo run -q -p cpt-run -- --steps 5000000 --speaker-wav melody.wav speaker/melody.bin
+*  then open melody.wav.
+*
+*  Each note sounds for NOTELEN, then the speaker is silenced for GAPLEN so repeated notes are
+*  distinct.  A divisor of 0 in the table ends the tune.  The CPU just waits in a delay loop
+*  while the tone generator does the work.
+* ===========================================================================
+SPKLO     EQU 128
+SPKHI     EQU 129
+*  DELAY costs 24 cycles per pass: 20833 passes = 500,000 cycles = 250 ms at 2 MHz.
+NOTELEN   EQU 20833
+GAPLEN    EQU 2500
+*
+          ORG 0
+          /START
+*
+          ORG 100H
+START     NOTES:HL
+NEXT      (HL):E
+          HL+1:HL
+          (HL):D
+          HL+1:HL
+          D:A
+          A-*E:A
+          FZ=1? /DONE
+          E:A
+          A:PORT(SPKLO)
+          D:A
+          A:PORT(SPKHI)
+          NOTELEN:BC
+          CALL(DELAY)
+          0:A
+          A:PORT(SPKLO)
+          A:PORT(SPKHI)
+          GAPLEN:BC
+          CALL(DELAY)
+          /NEXT
+*  Interrupts are off after reset, so this HLT is terminal: the emulator stops.
+DONE      WAIT
+*
+*  DELAY: wait BC passes of a 24-cycle loop.  Clobbers A and BC.
+DELAY     BC-1:BC
+          B:A
+          A-*C:A
+          FZ=0? /DELAY
+          RTN
+*
+*  Divisors for C4 D4 E4 F4 G4 A4 B4 C5, then a 1250 Hz beep, then the 0 terminator.
+NOTES     DW 1911, 1703, 1517, 1432, 1276, 1136, 1012, 956, 400, 0

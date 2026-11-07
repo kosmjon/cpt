@@ -158,26 +158,21 @@ Status tags used in the specs:
       and the timer (task 8c) coexist. Their individual frequencies/vectors remain [VERIFY] (T1).
 
 ### Speaker / tone output
-- [ ] P1. The output port(s) that drive the speaker (one or more).
+- [ ] P1. The real speaker port(s). Working guess (implemented): ports 0x80 (divisor low) and
+      0x81 (divisor high).
 - [ ] P2. Generation method: 1-bit output **bit-banged** by the CPU in a timed loop, vs. a
-      programmable timer/divisor chip given a frequency (melody playback suggests the former).
-      If a divider, its register layout.
-- [ ] P3. **Number of audio voices.** The audio system could be programmed to play J.S. Bach's
-      Two-Part Invention in F major, which raises the question of whether there were two
-      independent channels. Three possibilities, each leaving a different signature in the
-      source:
-      - (a) **Two tone channels** (two frequency generators/divisors summed into the speaker):
-            two frequency registers or two speaker ports; a note step writes two values.
-      - (b) **One channel, voices alternated** by software at a rapid rate (the pitch is
-            swapped between the two voices so they blend): a loop that flips pitch values on
-            a counter. Needs a timing source far faster than the 100 Hz task timer.
-      - (c) **One 1-bit output, software-mixed** by the CPU in a tight timed loop that
-            computes the combined square wave: a loop toggling one bit with computed delays;
-            plausibly holds the CPU for the duration, which sits oddly with the multitasking
-            monitor.
-- [ ] P4. The **music data format**: how a melody/two-part piece is encoded (note table;
-      duration; one entry per voice per step?). Also a likely source of the answer to P3, and a
-      way to confirm playback by replaying a known piece (the Two-Part Invention).
+      programmable timer/divisor chip given a frequency. Working guess (implemented): a 16-bit
+      divider on a 1 MHz tone clock, tone = clock / (2 * divisor). If the source shows
+      bit-banging or a different divider layout, replace the register interface only.
+- [x] P3. **Number of audio voices — one channel (CONFIRMED by the user).** The hardware has a
+      single tone output, used for beeps and tones. The two-part invention (Bach, F major) was
+      a **trick done in software on a special demo disk**, not the full word-processing system
+      and not a second tone generator: one channel plays apparent polyphony by alternating the
+      voices rapidly or mixing them in a tight CPU loop (as the Apple II and PC speaker did).
+      So the emulator models **one** tone output; the two-voice case is off the table.
+- [ ] P4. The **music data format** (from the demo disk, if it ever turns up): how a tune is
+      encoded (note table, durations), and how the single channel is driven to fake two voices.
+      Not needed for the word-processing system; only of interest for reproducing the demo.
 
 ### Timing & misc
 - [ ] B1. 8080 vs. 8085 details, clock speed, interrupt sources, cycle-accuracy target.

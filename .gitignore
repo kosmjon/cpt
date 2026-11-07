@@ -20,3 +20,6 @@ Thumbs.db
 # Generated CP/M build outputs (rebuilt by cpm/build-cpm.ps1)
 cpm/build/
 /target-verify/
+
+# Generated audio from the speaker demo
+speaker/*.wav

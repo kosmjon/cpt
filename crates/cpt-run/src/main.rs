@@ -11,6 +11,9 @@
 //!   cpt-run --load 0x0100 <file.bin>       Load (and start) at a given address.
 //!   cpt-run --steps 5000 <file.bin>        Cap the number of instructions.
 //!   cpt-run --timer <file.bin>             Attach the 100 Hz task-switch timer interrupt (RST 4).
+//!   cpt-run --speaker-wav out.wav <file.bin>
+//!                                          Attach the speaker; when the run ends, write what it
+//!                                          played to a 22.05 kHz mono WAV file.
 //!   cpt-run --serial-listen 127.0.0.1:2323 <file.bin>
 //!                                          Serial port as a Telnet server (the guest echoes;
 //!                                          add --serial-raw for a plain TCP byte pipe).
@@ -45,6 +48,8 @@ struct Options {
     /// Attach the 100 Hz task-switch timer (off by default: a program that enables interrupts
     /// without a handler at the timer's RST vector would run into page-zero garbage).
     timer: bool,
+    /// Attach the speaker and write what it played to this WAV file when the run ends.
+    speaker_wav: Option<String>,
     /// Disk image mounted in drive 1 / drive 2 (file-backed; writes persist on exit/flush).
     disk1: Option<String>,
     disk2: Option<String>,
@@ -63,6 +68,7 @@ fn parse_args() -> Result<Options, String> {
         serial: SerialMode::None,
         serial_raw: false,
         timer: false,
+        speaker_wav: None,
         disk1: None,
         disk2: None,
     };
@@ -84,6 +90,10 @@ fn parse_args() -> Result<Options, String> {
             }
             "--serial-raw" => opts.serial_raw = true,
             "--timer" => opts.timer = true,
+            "--speaker-wav" => {
+                i += 1;
+                opts.speaker_wav = Some(args.get(i).ok_or("--speaker-wav needs a file name")?.clone());
+            }
             "--serial-connect" => {
                 i += 1;
                 opts.serial = SerialMode::Connect(
@@ -153,7 +163,7 @@ fn main() -> ExitCode {
             eprintln!("error: {}", e);
             eprintln!(
                 "usage: cpt-run [--trace] [--load <addr>] [--steps <n>] \
-                 [--serial-listen <addr> [--serial-raw]|--serial-connect <addr>] [--timer] \
+                 [--serial-listen <addr> [--serial-raw]|--serial-connect <addr>] [--timer] [--speaker-wav <out.wav>] \
                  [--disk1 <image>] [--disk2 <image>] <file.bin>"
             );
             return ExitCode::from(2);
@@ -190,6 +200,16 @@ fn main() -> ExitCode {
         machine.attach_device(Box::new(cpt_machine::TimerDevice::new(
             cfg.timer_period_cycles,
             cfg.timer_vector,
+        )));
+    }
+
+    // Speaker: record what the program plays, to be written out as a WAV at the end.
+    let mut speaker_dev: Option<usize> = None;
+    if opts.speaker_wav.is_some() {
+        speaker_dev = Some(machine.device_count());
+        machine.attach_device(Box::new(cpt_machine::SpeakerDevice::new(
+            cfg.speaker_base_port,
+            cfg.speaker_tone_clock_hz,
         )));
     }
 
@@ -308,6 +328,30 @@ fn main() -> ExitCode {
         {
             let _ = c.eject(cpt_machine::Station::A);
             let _ = c.eject(cpt_machine::Station::B);
+        }
+    }
+
+    // Render what the speaker played to a WAV file.
+    if let (Some(dev), Some(path)) = (speaker_dev, opts.speaker_wav.as_ref()) {
+        const RATE: u32 = 22_050;
+        let events = exec
+            .machine
+            .device_mut(dev)
+            .and_then(|d| d.as_any_mut().downcast_mut::<cpt_machine::SpeakerDevice>())
+            .map(|s| s.take_events())
+            .unwrap_or_default();
+        let mut r = cpt_machine::ToneRenderer::new(RATE, cfg.cpu_clock_hz, cfg.speaker_tone_clock_hz);
+        r.push_events(&events);
+        let mut samples = Vec::new();
+        r.render_until(exec.cpu.cycles, &mut samples);
+        match std::fs::write(path, cpt_machine::wav_bytes(&samples, RATE)) {
+            Ok(()) => println!(
+                "speaker: {} tone change(s), {:.2} s of audio written to {}",
+                events.len(),
+                samples.len() as f64 / RATE as f64,
+                path
+            ),
+            Err(e) => eprintln!("error: cannot write {}: {}", path, e),
         }
     }
 
