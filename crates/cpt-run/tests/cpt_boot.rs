@@ -258,3 +258,18 @@ fn the_speaker_chimes_at_start_up_and_clicks_on_in() {
     let tones: Vec<&str> = list.split(", ").map(|e| e.split_once(": ").map_or(e, |(_, t)| t)).collect();
     assert_eq!(tones, ["2000 Hz", "off", "1000 Hz", "off", "1333 Hz", "off"], "{}", spk);
 }
+
+/// The keyboard program (PROG, key 02H): CODE + PROG starts recording ("PROG" on the title
+/// line), the keys typed are recorded, CODE + PROG again ends it, and PROG alone plays the
+/// recording back. Here "ab" is recorded, RETURN starts a new line, and PROG types "ab" again.
+#[test]
+fn prog_records_and_replays_keys() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "90000000", &["--keys", "{+77}{02}{-77}{ms 600}ab", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |      PROG"), "recording: {}", last_row(&out, "   1 |"));
+    let out = boot_with(&img, "110000000", &["--keys", "{+77}{02}{-77}{ms 600}ab{ms 300}{+77}{02}{-77}{ms 600}{14}{02}{ms 3000}",
+        "--keys-at", "80000000"]);
+    assert!(last_row(&out, "  45 |").starts_with("  45 |ab "), "the recorded line: {}", out);
+    assert!(last_row(&out, "  46 |").starts_with("  46 |ab "), "PROG played it back: {}", out);
+    assert!(!last_row(&out, "   1 |").contains("PROG"), "recording ended: {}", last_row(&out, "   1 |"));
+}

@@ -411,10 +411,11 @@ Key numbers, from the table and a sweep that typed each function key into the ru
 | 2FH | B0H | removes the typed word from the typing line [VERIFY] |
 | 0FH | A5H | **UP**, by the selected unit: the text moves up (on through the document) |
 | 1FH | A6H | **DOWN**, by the selected unit: the text moves down (the upper screen into the lower) |
+| 02H | A8H | **PROG**, the keyboard program (from the user's memory, then confirmed): CODE + PROG starts recording keys ("PROG" on the title line), CODE + PROG again ends it, and PROG plays it back. How a program is erased isn't known yet |
 | 2FH | B0H | **SKIP**, by the selected unit: discards text after the cursor. PAGE then SKIP empties the lower screen (the display list then ends at the ruler); LINE then SKIP drops one line |
 | 3FH | A4H | **STOP** [HYPOTHESIS: same key column; the keyboard interrupt handler treats it specially] |
 | 7FH | B1H | **ADJ** [HYPOTHESIS: same key column; it rejoined lines and left the typing line blank] |
-| 01 02 05 0D 1C 4C 6F 76 | B3 A8 B2 BD E5 E0 FE BA | nothing visible when typed alone (chords with CODE not yet tried) |
+| 01 05 0D 1C 4C 6F 76 | B3 B2 BD E5 E0 FE BA | nothing visible when typed alone or with CODE (1C, 4F and 5C with CODE beep) |
 
 The special keys' numbers follow the keypad's columns: the keys in one column share the low
 digit. IN, OUT and PRINT are 3DH, 2DH and 7DH. STOP, SKIP, ADJ, UP and DOWN are 3FH, 2FH, 7FH,

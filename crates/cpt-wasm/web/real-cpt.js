@@ -32,6 +32,9 @@ const CPT_KEY = {
   STOP: 0x3f,
   SKIP: 0x2f,
   ADJ: 0x7f,
+  // Keyboard program: CODE + PROG starts recording keys ("PROG" on the title line), CODE +
+  // PROG again ends it, and PROG alone plays the recording back.
+  PROG: 0x02,
   CHAR: 0x3e,
   WORD: 0x2e,
   LINE: 0x7e,
@@ -64,6 +67,7 @@ const SPECIAL_LABEL_KEYS = {
   SKIP: CPT_KEY.SKIP,
   STOP: CPT_KEY.STOP,
   ADJ: CPT_KEY.ADJ,
+  PROG: CPT_KEY.PROG,
 };
 
 // PC keys that are not plain characters (KeyboardEvent.code -> CPT key number).

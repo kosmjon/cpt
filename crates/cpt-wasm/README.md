@@ -93,7 +93,9 @@ did; the CPT software tracks its own SHIFT, LOCK and CODE.
 | numeric keypad 0–9 `.` `-` | the CPT keypad |
 
 On the special-key panel, IN, OUT, PRINT, CHAR, WORD, LINE, PARA, PAGE, HOLD, MAR SET, UP,
-DOWN, SKIP, STOP, ADJ and CODE send their real key numbers. SKIP discards text after the cursor
+DOWN, SKIP, STOP, ADJ, PROG and CODE send their real key numbers. PROG is the keyboard
+program: latch CODE and press PROG to start recording keys ("PROG" shows on the title line),
+CODE + PROG again to end it, and PROG to play it back. SKIP discards text after the cursor
 by the selected unit: PAGE then SKIP empties the lower screen. STOP and ADJ are mapped from the
 key column pattern and haven't been checked on the real screen yet. UP and DOWN move by the selected unit. UP moves the
 text up (on through the document) and DOWN moves it down: CODE + IN and Enter build the table
