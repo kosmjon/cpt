@@ -194,6 +194,8 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let start = exec.cpu.cycles;
     let mut recent: std::collections::VecDeque<(u16, u8, u16, u16, u16)> = std::collections::VecDeque::new();
     let mut next_key = 0usize;
+    // How many sectors had been read when the key script started (to list the reads it caused).
+    let mut reads_at_keys: Option<usize> = None;
     let mut next_screen = 0usize;
     // --profile: instructions executed per (bank block, 16-byte line) from --keys-at on.
     let mut hist: std::collections::HashMap<(u8, u16), u64> = std::collections::HashMap::new();
@@ -234,6 +236,10 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         }
         exec.step();
         let now = exec.cpu.cycles - start;
+        if reads_at_keys.is_none() && !schedule.is_empty() && now >= keys_at {
+            let fdc = exec.machine.device_mut(fdc_dev).unwrap().as_any_mut().downcast_mut::<CptFloppy>().unwrap();
+            reads_at_keys = Some(fdc.read_log.len());
+        }
         while next_key < schedule.len() && schedule[next_key].0 <= now {
             let kb = exec.machine.device_mut(kb_dev).unwrap().as_any_mut()
                 .downcast_mut::<cpt_machine::CptKeyboard>().unwrap();
@@ -272,6 +278,11 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         if a == b { format!("t{}s{}", t, a) } else { format!("t{}s{}-{}", t, a, b) }
     }).collect();
     println!("  in order: {}{}", shown.join(" "), if runs.len() > 60 { " ..." } else { "" });
+    if let Some(n) = reads_at_keys {
+        let after: Vec<String> = fdc.read_log[n..].iter()
+            .map(|&(t, s)| format!("t{}s{}({})", t, s, t as usize * 16 + s as usize)).collect();
+        println!("  after the keys started ({}): {}", after.len(), after.join(" "));
+    }
     let errors: Vec<_> = fdc.cmd_log.iter().filter(|c| c.6 != 0).collect();
     println!("  commands: {}, with nonzero status: {}", fdc.cmd_log.len(), errors.len());
     for c in errors.iter().take(10) {

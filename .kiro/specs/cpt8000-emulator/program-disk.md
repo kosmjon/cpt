@@ -293,7 +293,9 @@ screen.
 | `0D` | – | end of row | every row, builder and messages |
 | `B0` | 0 | per-character attribute slot: the next character is **white on black** [HYPOTHESIS]. One per column in the status row, two in the title row, none in text rows | walker skips it; cursor toggles it; gives exactly the reversed rows the user remembers |
 | `B1` | 0 | end of screen | walker substitutes B1 for a link to 0000H |
-| `B2` | 0 | filler | walker skips it |
+| `B2` | 0 | filler | walker skips it; pads the 16-byte cells below the status row |
+| `B3` | 0 | [HYPOTHESIS] start of a document's format line (its own ruler) | seen before RC-L1's format line |
+| `BD` | 0 | [HYPOTHESIS] marks a hyphen at a line break (one the system added) | `con` `BD` `-` `0D` in RC-L1's text |
 | `B4` / `B5` | 0 | half-line down / up (sub/superscript) | printer path moves +2 / −2 (9C64H); prompt text `{` `}` become B4/B5 (CFB7H) |
 | `C0` | 0 | starts every row; ends every status message. [HYPOTHESIS] attributes off | builder; messages are `text C0 0D` |
 | `C1 xx` | 0 | horizontal scroll: first visible column = `NOT xx`, 80-column window | BAC6H steps it, writes the ruler's and text area's together |
@@ -374,6 +376,54 @@ Key numbers, from the table and a sweep that typed each function key into the ru
 **Modelled timing [HYPOTHESIS]:** one event is latched at a time, and the next comes 1 ms
 (2,000 cycles) after the previous one is read. The real keyboard link's timing is unknown.
 
+## Opening documents **[CONFIRMED by running the real system]**
+
+**IN** (key 3DH), a document name and RETURN (key 14H) open a document through the system's
+own filer, for example `cpt-run --cpt-boot … --keys "{3D}rc-l1{14}"`. Every document in the
+directory opens:
+
+| Document | What it is |
+|---|---|
+| LEGAL, STD, T, PLASTIC | print-wheel tables ("T.017-5 REV (G-1-1) USA LEGAL 03/31/81"; numbers per character) |
+| D | "D-Page 8100/8515/8525 07/01/83", a printer/settings page with field markers |
+| OP | the OPERATION page: printer type "8X00 STANDARD (Rotary IV-IX)", hyphenation language, system messages, keyboard-to-printer |
+| WN | the WordNet control page (communications; RATE: 9600) |
+| LEX | a spelling dictionary ("LEX for Miscellaneous Disk") |
+| RC-L1 | a letter ("Letter to Carl Wales", 8/19/87) with its own format line |
+| HM-M1.2 | a memo ("Memo to Messrs. Bell and Phillips", October 21, 1987) |
+| MID | its first line is the volume label text, `5617  8100  H2` |
+
+**Screen layout with a document open.** The typing line (row 46) holds the current line. The
+lines before it fill the rows above, and the next 7 lines go below the ruler and status row
+(rows 49–55). So the typing line is mid-screen, with text both above and below.
+- **Below the status row:** the rows are built from 16-byte cells at 7E00H–7FFFH, chained
+  by `C2` links and padded with `B2`.
+- **Line-down** (key 0FH) moves one line through the document. Key 7FH moved two lines and
+  left the typing line blank [VERIFY].
+- **The ruler** takes the format of the current line: in RC-L1 the right margin moves to 60.
+- **The letter's format line** is a ruler stored in the document, starting with `B3`, and is
+  shown white on black.
+
+**The filer reads header blocks directly.** It did not re-read the directory; it had cached
+it at start-up. The sectors it read:
+
+| Document | Leaf "pointer" | Sectors read (track, physical sector) | Logical sector of the first read |
+|---|---|---|---|
+| LEGAL | 768 (t48, logical 0) | t48 s0, s3, s6, s9 | 0 |
+| T | 720 (t45, logical 0) | t45 s10, s13, s0, s3 | 14 |
+| MID | 552 (t34, logical 8) | t34 s12 | 4 |
+| OP | 892 (t55, logical 12) | t55 s2, s5, s8 | 6 |
+| LEX | 673 (t42, logical 1) | t42 s7, s10 | 13 |
+| RC-L1 | 675 (t42, logical 3) | t42 s13, s0 | 15 |
+
+Every read is a document's `01 name 02` header block and the blocks after it, in skew-3 order.
+That confirms the skew of 3 for document data. The leaf's 3-byte pointer is **not** the header
+block, though (only LEGAL's matches), and no 3-byte copy of the header's sector number exists
+anywhere on the disk. OP's pointer leads to a list block, and T's and RC-L1's into the middle
+of their text. Most likely the pointer is the document's list (or last) block, and the filer
+finds the start from data it cached at start-up [VERIFY by tracing the filer, segment 0CH
+function 29H].
+
 **Start-up needed two floppy fixes.** The main system reads interrupt-driven: INTRQ raises
 **RST 3** (handler 06BAH), and it waits for that in a yield loop at 087CH. It also finds its
 drives by selecting 0–3 on port 22H and reading FD1771 status bit 7 (**Not Ready**, routine
@@ -387,7 +437,8 @@ disk/boot-mem.bin`.
 
 ## Next steps
 
-1. Finish the filesystem: what a directory leaf pointer points to (each document's index?),
+1. Finish the filesystem: what a directory leaf pointer points to (not the header block; see
+   "Opening documents"),
    how a document's blocks chain (list blocks, the code-`11` blocks among the `10` data), the
    4-byte field, and whether the system area (tracks 1–32) is one structure or several segments.
    Finding the filer's read code in the system area (Segment 12) would settle most of this.

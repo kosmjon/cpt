@@ -12,7 +12,9 @@ What is understood (see .kiro/specs/cpt8000-emulator/program-disk.md):
     is track 0 sector 13.  In an inner node the first item has an empty name.
   * Pointers are logical sectors.  Within a track the filesystem uses a skew of 3:
     physical sector = (3 * logical sector) mod 16.  This is confirmed for the directory's own
-    root -> leaf pointers; it is NOT yet understood what a leaf's pointer points to.
+    root -> leaf pointers, and for document data (the real filer reads a document's blocks
+    in skew-3 order).  A leaf's pointer is NOT the document's header block (only LEGAL's
+    matches); what it points to is still open (a list block for OP, mid-text for T).
 
 usage:
   cptfs.py IMAGE            volume label, allocation summary, directory listing

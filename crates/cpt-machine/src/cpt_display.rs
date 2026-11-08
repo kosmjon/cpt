@@ -25,7 +25,11 @@
 //! - `80`-`8F` (the ruler glyphs) are drawn white on black by the character ROM itself
 //!   [HYPOTHESIS: the ruler has no slots but is reverse on the real screen].
 //! - `B1`: end of the screen (the walker at 8580H substitutes B1 for a link to 0000H).
-//! - `B2`: filler (skipped like B0 by 8580H).
+//! - `B2`: filler (skipped like B0 by 8580H; pads the 16-byte cells below the status row).
+//! - `B3`: starts a document's format line (its own ruler, drawn with the ruler glyphs)
+//!   [HYPOTHESIS: seen only there, in the letter RC-L1].
+//! - `BD`: comes before a hyphen at a line break in document text (`con` `BD` `-` `0D`)
+//!   [HYPOTHESIS: marks a hyphen the system added, as opposed to one typed].
 //! - `B4`/`B5`: half-line down/up (sub/superscript; the printer path at 9C64H moves +2/-2).
 //! - `C0`: starts every row and ends every status message.
 //! - `C1 xx`: horizontal scroll for the rows that follow: the first visible column is
@@ -127,7 +131,7 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     continue;
                 }
                 0xB2..=0xBF | 0xC5..=0xFF => {
-                    let known = matches!(b, 0xB2 | 0xB4 | 0xB5);
+                    let known = matches!(b, 0xB2 | 0xB3 | 0xB4 | 0xB5 | 0xBD);
                     if !known && !unknown.contains(&b) {
                         unknown.push(b);
                     }

@@ -149,3 +149,37 @@ fn command_keys_show_their_prompts() {
     let out = boot_with(&img, "100000000", &["--keys", "Hello{2D}world", "--keys-at", "80000000"]);
     assert!(last_row(&out, "   1 |").starts_with("   1 |OUT        1 WORLD"), "{}", out);
 }
+
+/// IN, a document name and RETURN open a document from the disk through the system's own
+/// filer. LEGAL is a print-wheel table: its first line goes on the typing line (row 46) and
+/// the following lines below the ruler and status rows. The filer reads its four blocks at
+/// track 48, physical sectors 0, 3, 6 and 9 (logical 0-3 with the skew of 3), and the screen
+/// matches those sectors byte for byte.
+#[test]
+fn in_opens_a_document_from_the_disk() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "110000000", &["--keys", "{3D}legal{14}", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |IN         1 LEGAL"), "{}", out);
+    assert!(last_row(&out, "  46 |").starts_with("  46 |T.017-5  REV (G-1-1)    USA LEGAL           03/31/81  LEGAL"), "{}", out);
+    assert!(last_row(&out, "  49 |").starts_with("  49 |1   20  22  23  24  25  26  229 8   9"), "{}", out);
+    let reads = out.lines().find(|l| l.contains("after the keys started")).expect("read list");
+    assert!(reads.contains("(4): t48s0(768) t48s3(771) t48s6(774) t48s9(777)"), "{}", reads);
+}
+
+/// Line-down (key 0FH) moves through an open document: the letter RC-L1 scrolls up past the
+/// typing line, its own format line (margins at 1 and 60, white on black) goes above, and the
+/// main ruler takes the document's margins.
+#[test]
+fn line_down_scrolls_through_a_letter() {
+    let Some(img) = image() else { return };
+    let keys = format!("{{3D}}rc-l1{{14}}{{ms 8000}}{}", "{0F}{ms 300}".repeat(14));
+    let out = boot_with(&img, "150000000", &["--keys", &keys, "--keys-at", "80000000"]);
+    assert!(last_row(&out, "  32 |").starts_with("  32 |Letter to Carl Wales"), "{}", out);
+    assert!(last_row(&out, "  33 |").starts_with("  33 |M...:....|") && last_row(&out, "  33 |").ends_with("white on black"),
+        "the letter's format line:\n{}", out);
+    assert!(last_row(&out, "  45 |").starts_with("  45 |Dear Carl:"), "{}", out);
+    assert!(last_row(&out, "  49 |").starts_with("  49 |Since July 13, 1987, you began calling in sick on the"), "{}", out);
+    assert!(last_row(&out, "  48 |").contains(" 1   14 "), "line 14: {}", last_row(&out, "  48 |"));
+    assert!(last_row(&out, "  47 |").starts_with("  47 |^...:....|....:....|....:....|....:....|....:....|....:....M"),
+        "the ruler takes the letter's right margin (60): {}", last_row(&out, "  47 |"));
+}
