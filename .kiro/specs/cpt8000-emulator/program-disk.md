@@ -542,6 +542,100 @@ function code a key produces is listed above. What the remaining keys do:
   number doesn't follow the column's low-digit pattern (that would give 1DH), but PAGE (5FH)
   breaks the pattern too.
 
+## Patch pages **[CONFIRMED by disassembly and by running it; syntax details HYPOTHESIS]**
+
+Per the user, a program disk could carry hidden "patch pages": documents in a special syntax
+that patch the code after it has been loaded, to fix bugs. The system has this mechanism, but
+**neither disk has a patch page**, so start-up runs the check and applies nothing.
+
+**Where it runs.** Start-up calls a patch processor once, after the main system is in memory.
+Addresses are in bank 0 and differ between the two disks:
+
+| | cpt.img | cpt2489 |
+|---|---|---|
+| entry | 29BDH | 2CECH |
+| scan for `!` | 2A25H | 2D54H |
+| common exit | 2A96H | 2DC5H |
+| entered at | 41.2M cycles | 40.5M cycles |
+| left at (A = 0, no error) | 41.3M cycles | 44.7M cycles |
+
+On both disks it leaves without reaching the `!` scan.
+
+**How it finds patch pages.** It looks documents up by name with a request block that holds a
+key range:
+- **`.P` to `.P9`** (at 2D71H on cpt.img). So patch pages are documents named `.P`, `.P1` …
+  `.P9`. The leading dot is probably what hides them from the user [HYPOTHESIS].
+- An alternative block (2D94H), used when bit 1 of the mode byte (3B30H) is set: the name
+  `P` + four A0H bytes + `P`, up to the same plus `9`. A0H is a non-printing (hidden) space.
+
+On both disks the lookup finds nothing, and a full search of both images finds those names
+only in the code's own request blocks.
+
+**The syntax** (from the interpreter at 2A25H–2BD8H on cpt.img; not yet seen in a real page):
+- **`!` + five characters** starts a section. The five characters must match the five at
+  0395H, the start of the message buffer `xxxxx  *** PATCH PAGE ERROR ***`, or it's an error.
+  At patch time those five are literally `xxxxx` on both disks. They're probably a release-ID
+  placeholder that the build would stamp [HYPOTHESIS].
+- **`@segment:offset (`** sets where the following values go: the segment's base plus the
+  offset. Several `:`-separated numbers after the segment are added together.
+- **Values** follow, separated by any non-digit (e.g. `,`), stored a byte at a time.
+  **`)`** ends the group.
+  - Numbers are **decimal** (the parser at 2B9FH multiplies by ten).
+  - `-` negates a number.
+  - A **`*`** prefix makes a two-byte value: `*n` is the number n, and `*segment:offset`
+    is that segment's base plus the offset (an address).
+- **`$` + number** ends the page. In the checking pass (mode 0), a checksum accumulated over
+  the group values (2C59H, into 3B31H) must equal that number, or it's error 2. A `!` where a
+  group is expected is error 3.
+- **Errors** are shown as `xxxxx  *** PATCH PAGE ERROR ***` with the error number placed at
+  03B5H (1CF6H). The `xxxxx` would be replaced by the page or section ID.
+
+**An example patch page** [HYPOTHESIS: built from the interpreter's code, not tested]. It is
+a document named `.P1` whose text is:
+
+```
+!xxxxx
+@35:120 (0,0,0)
+@35:200 (195,*35:300)
+$11
+```
+
+- `!xxxxx` is the section header. Its five characters match the ones at 0395H on these
+  disks.
+- `@35:120 (0,0,0)` writes three bytes of 0 (NOP) at segment 35's base + 120.
+  - `@35:` names **segment 35**, which is 23H, the editor. Numbers in a patch page are
+    decimal, which fits the user's memory of decimal segment numbers.
+  - The address is the segment's base (looked up through 39C1H, which selects the
+    segment's bank if needed) plus the offset after the `:`.
+  - The interpreter reads one more character after the offset's terminator, here the `(`,
+    so the space before it matters.
+- `@35:200 (195,*35:300)` writes `195` (C3H, `JMP`) at segment 35 + 200, then
+  `*35:300`. A `*` value with a `:` is an address: segment 35's base + 300, stored as two
+  bytes, low byte first. So the group plants `JMP <segment 35 + 300>`. A plain `*n` is a
+  two-byte number.
+- `$11` is the checksum. It's taken over every character from each `@` through its `)`,
+  including the spaces; the line ends between groups don't count. For each character c (a 0
+  counts as 1), sum = (c XOR sum) + 1, kept to a byte. The two groups above give 67, then 11.
+- The one call checks the whole page first: the header, then the checksum (error 2 if wrong).
+  It then scans for the header again and applies the groups.
+- Offsets are relative to the segment's base, the address `cptsegs.py` prints as the
+  table, so a real patch would be computed from the segment's code. The values here are
+  placeholders, chosen only to show the syntax.
+
+**Later reuse of 0395H.** At 42.6M cycles (cpt.img) a different routine (36E0H–37FEH) builds
+a volume ID in the same buffer: the label's 16-character name, then `-` and three numbers
+from the label. By the time the system is settled the patch message is gone from memory,
+which is why it isn't in a post-start-up dump.
+
+**Next steps, if wanted:**
+- Write a small `.P` page in this syntax into a copy of a disk image (via the filer's
+  directory format, see "The directory"), boot it, and see whether the patch lands and how
+  errors show. That would confirm the syntax.
+- Find the five-character ID check's intent: whether `xxxxx` is a placeholder a build would
+  stamp with a release ID.
+- Confirm what 39C1H returns as a segment's "base": its function table or the start of its
+  code.
+
 ## The speaker **[CONFIRMED by disassembly and by running it]**
 
 The speaker is driven by the 8253's **counter 0** (port 1CH; control port 1FH). Counter 0
