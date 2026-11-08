@@ -44,35 +44,113 @@ Not yet implemented (awaiting the official MOL80 manual / real source):
   `(HL+offset)` page-aligned array addressing
 - Confirmed directive spellings and radix markers
 
-### CPT 8000/9000 emulator (in progress)
+### CPT 8000/9000 emulator (the real system boots and runs)
 
-An Intel 8080 emulator plus a model of the CPT workstation hardware. The complete CPT
-word-processing system source will be compiled with `mol80asm`, linked and bin-packed into a
-system image, and run on the emulated machine. Built as a cargo workspace of focused crates:
+An Intel 8080 emulator plus a model of the CPT workstation hardware. It boots **real CPT
+program disks**, decoded from TeleDisk images of the original 8-inch floppies, and runs the
+original CPT word-processing software. You can use it from the command line or in a browser.
+The hardware model was worked out from the software itself: what it reads, writes and expects
+from each port. Built as a cargo workspace of focused crates:
 
 | Crate | Status | What it is |
 |-------|--------|------------|
 | `crates/i8080-isa` | done | Shared opcode metadata + disassembler (used by the emulator and the assembler's transpiler) |
 | `crates/i8080-cpu` | done | Pure 8080 CPU core; passes the CP/M diagnostics incl. the exhaustive 8080EXM exerciser |
-| `crates/cpt-machine` | in progress | Banked memory (bank 0 + switchable 32K blocks), bank-select port, `Device` trait, executive loop with interrupts, memory-mapped display device with the vertical-retrace interrupt |
-| `crates/cpt-run` | done | CLI trace runner: load a binary, run it on the machine, print a disassembled trace |
-| `crates/cpt-wasm` | proof | WebAssembly boundary + canvas web page: runs the machine in a browser and paints the page-white display in a CRT case (see its README) |
+| `crates/cpt-machine` | working | The CPT hardware model (`CptSystem`): banked memory, FD1771 floppy + 8257 DMA, 8253 timer and speaker, keyboard, display list decoder, 8251 serial port. Also the generic machine used by CP/M |
+| `crates/cpt-run` | working | CLI runner: `--cpt-boot` boots a real disk with scripted keys and prints the decoded screen, plus a disassembler and trace/breakpoint tools |
+| `crates/cpt-wasm` | working | The real CPT in a browser: screen in a CRT case, two 8-inch drives, the special-key panel, POWER/RESET, speaker (see its README) |
 
-Still to come: keyboard device, file-backed data disk, the link-editor (`cpt-link`) that
-bin-packs segments into a system image, and the full React UI.
+#### The program disks
+
+Three TeleDisk images are in `.kiro/specs/cpt8000-emulator/`:
+
+| Image | What it is |
+|---|---|
+| `cpt.td0` | "Program disk for CPT 8100", 14 documents |
+| `cpt2365.td0` | the same disk (decodes byte for byte the same as `cpt.td0`) |
+| `cpt2489.td0` | "Program disk for 8100, 8515/25 CPT word processor w/TTY", 28 documents, with TTY communications |
+
+Decode them to raw images (77 tracks × 16 sectors × 256 bytes) under `disk/` (gitignored).
+`td0.py` handles both normal and "advanced" (LZHUF-compressed) TeleDisk files:
 
 ```
-# Run a binary on the emulated machine with a disassembled trace:
-cargo run -p cpt-run -- --trace --steps 100 program.bin
-
-# End-to-end: assemble MOL80, then run the result on the machine:
-cargo run -p mol80asm -- --bin out.bin mol80asm/examples/sample.mol
-cargo run -p cpt-run -- --trace --steps 20 out.bin
-
-# Display demo: draws the title / text / typing-line ruler / status regions, and the
-# vertical-retrace interrupt handler scrolls the text (give it enough steps to retrace):
-cargo run -p cpt-run -- --demo --steps 40000
+python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img
+python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img
 ```
+
+#### In a browser
+
+```
+run-web.bat
+```
+
+This builds the wasm module, copies it next to the page and serves it at
+http://localhost:8080 (needs `rustup target add wasm32-unknown-unknown` and Python). Insert
+`disk/cpt.img` in drive 1.
+- **Start-up:** the system starts as it did on the real machine, in under a second. Real disk
+  timing is kept, but the emulation runs faster than real time until it settles.
+- **Keyboard:** type on the PC keyboard. Alt = CODE, ↑/↓ = UP/DOWN, Caps Lock = LOCK.
+- **Special-key panel:** use it for IN, OUT, PRINT, the units, SKIP, PROG, CLEAR TAB SET and
+  the rest. A held key repeats where the CPT repeats it.
+- **Open a document:** press IN, type `rc-l1`, Enter.
+
+`crates/cpt-wasm/README.md` has the details.
+
+#### From the command line
+
+```
+# Boot, type IN rc-l1 RETURN after start-up, and print the decoded screen:
+cargo run -p cpt-run --release -- --cpt-boot disk/cpt.img 110000000 - 40000 --keys "{3D}rc-l1{14}" --keys-at 80000000
+
+# Save memory after start-up (bank 0, then each 32K block) and decode the segment map:
+cargo run -p cpt-run --release -- --cpt-boot disk/cpt.img 82000000 - 40000 disk/mem.bin
+python tools/cptsegs.py disk/mem.bin
+
+# Disassemble part of a file:
+cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
+```
+
+- **Arguments:** `--cpt-boot <image> <cycles> <breakpoint|-> <read delay> [<mem out>]`. The
+  read delay must be about 32,000 cycles or more; the software checks disk timing.
+- **Key scripts:** `{XX}` taps key number XX (hex), `{+XX}`/`{-XX}` press/release, `{ms N}`
+  waits. Other options: `--screen-at`, `--brk-after`, `--profile`.
+- **Serial:** the 8251 can be a Telnet server (`--serial-listen 127.0.0.1:2323`), or take
+  scripted input (`--serial-in`).
+
+#### Tools
+
+| Tool | What it does |
+|---|---|
+| `tools/td0.py` | Decode a TeleDisk image (incl. LZHUF advanced compression) to a raw image |
+| `tools/cptfs.py` | List a CPT disk: volume label, allocation map, document directory |
+| `tools/cptsegs.py` | The segment / bank / function map from a memory dump (hex and decimal) |
+| `tools/cptkeys.py` | The keyboard remap tables from a memory dump |
+
+#### What works on the real system
+
+- **Start-up** from drive 1 with real disk timing.
+- **The screen:** reverse-video title line, ruler and format lines, the status at the title
+  line's right end, 54 rows.
+- **Documents:** opening them (IN), scrolling with UP/DOWN by unit, PAGE, SKIP, the units
+  CHAR, WORD, LINE, PARA and PAGE, and the table of contents (CODE + IN).
+- **Editing:** typing, RETURN, backspace, tabs, CLEAR TAB SET, MAR SET/REL, HOLD, the
+  keyboard program (PROG), the CODE + letter menus, and the staple key (brings in the
+  document named on the typing line).
+- **Keys:** the CPT's own auto-repeat for the keys on its repeat list.
+- **The speaker:** the start-up chime and key clicks.
+- **The TTY disk:** CODE + I, `ctty` turns communications on. The 8251 is set up, and bytes
+  go both ways over TCP.
+
+#### Known gaps
+
+- **Unidentified keys:** INSERT, MOVE and WORDPAK. WORDPAK's segment isn't on these disks.
+  ERASE (4FH) is a hypothesis.
+- **TTY protocol:** received text isn't filed into the document, and typed text isn't sent.
+  See `segments-cpt2489.md`, "Communications: known issues and next steps".
+- **Printing:** there's no printer device.
+- **Glyphs:** the character ROM is unknown, so special glyphs are ASCII stand-ins.
+- **Patch pages:** the mechanism is decoded (documents `.P`–`.P9`), but neither disk has one,
+  and the syntax is untested.
 
 ## Running CP/M 2.2 over the emulated serial port
 
@@ -163,16 +241,32 @@ More detail: `.kiro/specs/cpt8000-emulator/cpm-over-serial.md`.
 ## Specs
 
 Design and planning documents live under `.kiro/specs/`:
-- `mol80-assembler/` — requirements, design, task plan for the assembler
-- `cpt8000-emulator/` — requirements, design, task plan for the emulator
-- `SOURCE-CODE-CHECKLIST.md` — open questions to resolve against the MOL80 manual and the
-  original CPT system source
+- `mol80-assembler/`: requirements, design, task plan for the assembler.
+- `cpt8000-emulator/`: requirements, design, task plan for the emulator, and the findings
+  about the real system:
+  - `program-disk.md` covers the disk format and directory, boot, memory and banks,
+    segments, the display list, the keyboard (key numbers, dispatch, auto-repeat), the
+    speaker, the staple key and patch pages.
+  - `segments-cpt2489.md` is the TTY disk's segment map (hex and decimal) and the serial
+    communications.
+  - `boot-sequence.md`, `memory-map.md`, `special-keys.md` and `cpm-over-serial.md`.
+- `SOURCE-CODE-CHECKLIST.md`: open questions to resolve against the MOL80 manual and the
+  original CPT system source.
 
 Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`, or
 `[VERIFY]` to distinguish what is known from what still needs confirmation.
 
 ## Status
 
-The assembler front end and code generation are working and tested for the confirmed MOL80
-subset. The emulator and the MOL80 macro/expansion layer are designed and awaiting the full
-manual and the original system source.
+- **The emulator** boots and runs the real CPT software from the original program disks, on
+  the command line and in a browser. Most editing features work (see "What works on the
+  real system").
+  - The open work is the unidentified keys, the TTY protocol, printing and the character
+    ROM.
+  - `cargo test --workspace` runs 336 tests with no warnings. The real-disk boot tests skip
+    themselves unless `disk/cpt.img` and `disk/cpt2489.img` have been decoded.
+  - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
+- **The assembler** front end and code generation are working and tested for the confirmed
+  MOL80 subset. The MOL80 macro/expansion layer is designed and awaits the full manual and
+  the original system source.
+- **CP/M 2.2** runs on the generic emulated machine over a Telnet serial console.

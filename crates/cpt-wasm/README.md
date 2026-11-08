@@ -55,12 +55,19 @@ The web page shows two drive bays beside the screen with Insert (file picker) / 
 
 The page powers up idle with a black screen. Insert a real CPT program disk image in
 **drive 1** and it boots the real CPT software. The image must be the raw 77 × 16 × 256 =
-315,392-byte form;
-make it from the TeleDisk file with:
+315,392-byte form. Make it from a TeleDisk file with:
 
 ```sh
 python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img
+python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img
 ```
+
+**Which disk:**
+- **`cpt.img`** is the main program disk.
+- **`cpt2489.img`** is the TTY disk, with serial communications (CODE + I, then `ctty`). It
+  boots here too. Its 8251 serial port is in the module, but the page has no serial
+  connection, because a browser can't open a TCP socket. For a terminal, use `cpt-run
+  --serial-listen` (see `segments-cpt2489.md`).
 
 **Start-up.** The software checks disk timing. Reads must take about 31 ms or more, as on a
 real 8-inch drive, or it reports "THE DISK IN STATION 2 SEEMS TO BE FAULTY". So the page keeps
@@ -92,16 +99,39 @@ did; the CPT software tracks its own SHIFT, LOCK and CODE.
 | `\` | the CPT's `|` / `\` key |
 | numeric keypad 0–9 `.` `-` | the CPT keypad |
 
-On the special-key panel, IN, OUT, PRINT, CHAR, WORD, LINE, PARA, PAGE, HOLD, MAR SET, UP,
-DOWN, SKIP, STOP, ADJ, PROG, CLEAR TAB SET and CODE send their real key numbers. CLEAR TAB
-SET puts a tab stop at the cursor's column, or clears the one there. PROG is the keyboard
-program: latch CODE and press PROG to start recording keys ("PROG" shows on the title line),
-CODE + PROG again to end it, and PROG to play it back. SKIP discards text after the cursor
-by the selected unit: PAGE then SKIP empties the lower screen. STOP and ADJ are mapped from the
-key column pattern and haven't been checked on the real screen yet. UP and DOWN move by the selected unit. UP moves the
-text up (on through the document) and DOWN moves it down: CODE + IN and Enter build the table
-of contents in the upper screen, then PAGE, DOWN scrolls it all into the lower screen. The other keys are not yet identified on the real
-system, and their tooltips say so.
+PC auto-repeat isn't passed on. A held PC key is one press and one release, as on the real
+keyboard, and the CPT's own auto-repeat (below) does the repeating.
+
+**The special-key panel.** These keys send their real key numbers: CODE, IN, OUT, PRINT,
+CHAR, WORD, LINE, PARA, PAGE, HOLD, MAR SET, MAR REL, CLEAR TAB SET, UP, DOWN, SKIP, STOP,
+ADJ, PROG, ERASE, and the staple key.
+- **UP and DOWN** move by the selected unit. UP moves the text up (on through the document)
+  and DOWN moves it down. For example, CODE + IN and Enter build the table of contents in the
+  upper screen; then PAGE, DOWN scrolls it all into the lower screen.
+- **SKIP** discards text after the cursor by the selected unit. PAGE then SKIP empties the
+  lower screen.
+- **CLEAR TAB SET** puts a tab stop at the cursor's column, or clears the one there.
+- **MAR REL** is the margin release.
+- **PROG** is the keyboard program. Latch CODE and press PROG to start recording keys ("PROG"
+  shows on the title line), CODE + PROG again to end it, and PROG to play it back.
+- **The staple key** is under WORDPAK, drawn as a staple. It takes the text on the typing
+  line as a document name and brings that document in at the typing line, e.g. type `wn` at
+  the start of a line, then press it.
+- **ERASE** (4FH) is a hypothesis: it blanks the character under the cursor and moves on.
+- **STOP and ADJ** are mapped from the key-column pattern and haven't been checked against
+  the real machine.
+- **CODE** latches: click it, then the other key, for a chord.
+- **INSERT, MOVE and WORDPAK** are not yet identified on the real system, and their tooltips
+  say so. WORDPAK's code isn't on these disks.
+
+**Auto-repeat.** A panel key is held down for as long as the mouse button or a finger is
+on it, so the CPT's own auto-repeat works:
+- **Timing:** after about 300 ms, a repeat every 30 ms.
+- **Which keys:** only those on the CPT's repeat list. These are UP, DOWN, SKIP, ADJ, ERASE,
+  PROG, RETURN, backspace, space, `.`, `-`, `*` and `x` (see `program-disk.md`,
+  "Auto-repeat").
+- **Taps:** a quick click is a 40 ms tap. Enter or Space on a focused key button is a tap
+  too.
 
 To open a document, press IN, type its name and press Enter, e.g. `rc-l1` (a letter) or
 `hm-m1.2` (a memo). Then press ↓ and ↑ to move through it.
@@ -121,7 +151,7 @@ Checks without a browser, both using `disk/cpt.img` (skipped if it is missing):
 
 ```sh
 node crates/cpt-wasm/web/check-real.mjs   # real-cpt.js + wasm: start-up, keys, LEGAL
-node crates/cpt-wasm/web/check-page.mjs   # cpt.js on a fake DOM: insert, start, type, eject, power
+node crates/cpt-wasm/web/check-page.mjs   # cpt.js on a fake DOM: insert, start, type, held-key repeat, eject, power
 ```
 
 Exports: `cpt_real_insert(drive)`, `cpt_real_eject(drive)`, `cpt_real_start` (boot from
