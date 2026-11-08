@@ -111,7 +111,7 @@ fn the_started_system_shows_its_editing_screen() {
     assert!(out.contains("screen from the display list at 7FF8H (48 rows)"), "{}", out);
     let ruler = last_row(&out, "  47 |");
     assert!(ruler.starts_with("  47 |^...:....|....:....|"), "ruler, cursor at column 1: {}", ruler);
-    assert!(ruler.ends_with("....:....M|"), "right margin at column 80: {}", ruler);
+    assert!(ruler.ends_with("....:....M| white on black"), "right margin at column 80, reversed: {}", ruler);
     let status = last_row(&out, "  48 |");
     assert!(status.contains(" 1    0 "), "status row: {}", status);
     assert!(out.contains("ended at: end mark at"), "{}", out);
@@ -133,6 +133,10 @@ fn typing_shows_text_on_the_typing_line() {
     assert!(last_row(&out, "  47 |").starts_with("  47 |M...:.^..|"), "cursor marker at column 7:\n{}", out);
     let status = last_row(&out, "  48 |");
     assert!(status.contains(" 7    1 "), "status row (column 7, line 1): {}", status);
+    // The title, ruler and status rows are white on black; text and the typing line are not.
+    assert!(out.contains("white on black (rows): 1, 47, 48"), "{}", out);
+    assert!(last_row(&out, "  47 |").ends_with("| white on black"), "the whole ruler is reversed");
+    assert!(last_row(&out, "  46 |").ends_with('|'), "the typing line is black on white");
 }
 
 /// The unit keys name themselves on the status row, and IN/OUT/PRINT open a command prompt on

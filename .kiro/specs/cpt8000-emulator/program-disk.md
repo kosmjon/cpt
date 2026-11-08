@@ -291,7 +291,7 @@ screen.
 | `84` | 1 | ruler: a tab stop | **[CONFIRMED by typing]**: tab set (key 75H) puts 84 at the cursor |
 | `89` | 1 | [HYPOTHESIS] a tab character in text | treated as a tab/word break (8552H, 863DH) |
 | `0D` | – | end of row | every row, builder and messages |
-| `B0` | 0 | empty per-character attribute slot (one per column in status rows, two in the top line) | walker skips it; cursor toggles it |
+| `B0` | 0 | per-character attribute slot: the next character is **white on black** [HYPOTHESIS]. One per column in the status row, two in the title row, none in text rows | walker skips it; cursor toggles it; gives exactly the reversed rows the user remembers |
 | `B1` | 0 | end of screen | walker substitutes B1 for a link to 0000H |
 | `B2` | 0 | filler | walker skips it |
 | `B4` / `B5` | 0 | half-line down / up (sub/superscript) | printer path moves +2 / −2 (9C64H); prompt text `{` `}` become B4/B5 (CFB7H) |
@@ -299,15 +299,26 @@ screen.
 | `C1 xx` | 0 | horizontal scroll: first visible column = `NOT xx`, 80-column window | BAC6H steps it, writes the ruler's and text area's together |
 | `C2 lo hi` | 0 | jump to `hi lo` (0000H ends the screen) | walker, builder |
 | `C3 a a b b` | 0 | disarmed jump: continue at `b b` (the byte after) | E6BAH flips C2↔C3 to hide/show an optional status row |
-| `C4` | 0 | the cursor. [HYPOTHESIS] reverse video until the next `B0`/`C0` | blink at 93C0H swaps a slot B0↔C4 every 25 ticks |
-| `C5`–`CF` | 0 | [HYPOTHESIS] more attributes (bit 2 reverse, bit 3 underline); C6, C7, CA are built by the line copier at 8820H (block 1) | not yet traced |
+| `C4` | 0 | the cursor: the next character is the opposite of its row (black on white in a white-on-black row) | blink at 93C0H swaps a slot B0↔C4 every 25 ticks |
+| `C5`–`CF` | 0 | unknown; C6, C7, CA are built by the line copier at 8820H (block 1) | not yet traced |
 
-Reverse video for a whole line (white on black against the normal black on white) is likely an
-attribute code at the start of the row and not reset by per-character `B0` slots; this can only
-be confirmed once a document, a cursor or a highlighted prompt is on the screen, so after the
-keyboard is attached [VERIFY]. The character ROM itself is not on the disk; the glyph shapes for
-80H–AFH (tab markers, ruler ticks, the return mark 8DH?) are unknown and drawn with ASCII
-look-alikes.
+**Reverse video [user's memory, with a HYPOTHESIS for how it is coded].** The screen is black
+on white. The user remembers the title row, the ruler and the status row as white on black,
+and the document text and the typing line (the row just above the ruler) as black on white.
+The display data has no row or region code that marks those rows. Two things in the data do
+fit them:
+- The title and status rows put a `B0` slot before every character, and text rows have none.
+  So `B0` = "next character white on black".
+- The ruler is made only of glyphs 80H–87H, so the character ROM draws those glyphs inverse.
+
+With that rule a few cells come out black on white inside the reversed rows:
+- In the title row: column 40 (where the copyright message's `[` sat) and the last two
+  columns.
+- In the status row: the column and line numbers (columns 64–67 and 69–72), which would be
+  small black-on-white boxes [VERIFY with a photo or a memory of the screen].
+
+The character ROM is not on the disk. The glyph shapes for 80H–AFH (ruler ticks, tab marks,
+the return mark 8DH?) are unknown and drawn with ASCII look-alikes.
 
 Early in the start-up the screen has 58 rows. Once the system has started (about 35 s of
 emulated time), the editing screen has **48 rows**:
@@ -382,8 +393,8 @@ disk/boot-mem.bin`.
    Finding the filer's read code in the system area (Segment 12) would settle most of this.
 2. ~~Decode the display memory format~~ (done above). Still open: C5–CF, the line attribute for
    reverse video, and the top line's two slots per column.
-3. ~~Attach a keyboard~~ (done above). Still open: reverse video (none seen yet, even in the
-   IN/OUT/PRINT prompts) and the cursor blink (93C0H, only when 22F9H is set); CODE chords;
+3. ~~Attach a keyboard~~ (done above). Still open: confirming the reverse-video rule (the
+   status row's number boxes), the cursor blink (93C0H, only when 22F9H is set), CODE chords,
    names for the rest of the function keys; whether OUT can save a document (writes to the
    image).
 4. Replace the fixed read delay with a rotation model once the timing check is understood, and

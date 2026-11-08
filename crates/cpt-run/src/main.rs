@@ -358,8 +358,8 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
 
 /// Decode the real display list starting at `head` (see `cpt_machine::cpt_display`) and print
 /// the screen in a frame, one numbered line per row. Runs of blank rows are collapsed. On a
-/// terminal, reverse video and underline are shown with ANSI escapes; reverse-video runs are
-/// also listed so they show up in plain (redirected) output.
+/// terminal the screen is drawn in its own colours (black on white, with white-on-black rows);
+/// in plain (redirected) output white-on-black rows are tagged after the frame.
 fn print_screen(m: &mut Machine, head: u16) {
     use std::io::IsTerminal;
     let screen = cpt_machine::cpt_display::render(|a| m.read(a), head, 80);
@@ -378,7 +378,18 @@ fn print_screen(m: &mut Machine, head: u16) {
             i += run;
             continue;
         }
-        println!("{:>4} |{}|", i + 1, lines[i]);
+        // In plain output, tag rows shown white on black (all of it, or the runs that are).
+        let tag = if ansi || screen.rows[i].iter().all(|c| !c.reverse) {
+            String::new()
+        } else if screen.row_is_reverse(i) {
+            " white on black".to_string()
+        } else {
+            let cols: Vec<String> = screen.reverse_runs().iter().filter(|r| r.0 == i)
+                .map(|&(_, a, b)| if a == b { format!("{}", a + 1) } else { format!("{}-{}", a + 1, b + 1) })
+                .collect();
+            format!(" white on black at {}", cols.join(","))
+        };
+        println!("{:>4} |{}|{}", i + 1, lines[i], tag);
         i += 1;
     }
     println!("     +{}+", rule);
@@ -389,10 +400,10 @@ fn print_screen(m: &mut Machine, head: u16) {
         cpt_machine::cpt_display::Ending::ByteLimit => "byte limit (unterminated list)".into(),
     };
     println!("  ended at: {}", ending);
-    let runs: Vec<String> = screen.reverse_runs().iter()
-        .map(|&(r, a, b)| if a == b { format!("row {} col {}", r + 1, a + 1) } else { format!("row {} cols {}-{}", r + 1, a + 1, b + 1) })
-        .collect();
-    println!("  reverse video: {}", if runs.is_empty() { "(none)".into() } else { runs.join(", ") });
+    let mut rev_rows: Vec<usize> = screen.reverse_runs().iter().map(|r| r.0 + 1).collect();
+    rev_rows.dedup();
+    let rev_rows: Vec<String> = rev_rows.iter().map(|r| r.to_string()).collect();
+    println!("  white on black (rows): {}", if rev_rows.is_empty() { "(none)".into() } else { rev_rows.join(", ") });
     if !screen.unknown_codes.is_empty() {
         let u: Vec<String> = screen.unknown_codes.iter().map(|c| format!("{:02X}", c)).collect();
         println!("  codes with no rule yet: {}", u.join(" "));

@@ -5,30 +5,37 @@
 //! read out of the real system code; each rule notes where it came from. Rules marked
 //! [HYPOTHESIS] are inferred from how the software uses a code, not from the hardware.
 //!
+//! The screen is black on white. Per the user, the title row, the ruler and the status row are
+//! white on black, and the document text and the typing line (just above the ruler) are black
+//! on white.
+//!
 //! Stream format:
 //! - `00`-`AF`: a visible character, one column each. `20`-`7E` are ASCII; `A0` is a required
 //!   (non-breaking) space (the printer path at 1A38H turns it into 20H); `80`-`8F` are special
 //!   glyphs from the character ROM: the ruler uses `80` (column tick), `81` (every 5th), `82`
-//!   (every 10th), `83` (a margin) and `87` (the cursor's column, which moves as you type)
-//!   (builder at E4E0H; confirmed by typing). `84` and `89` are
-//!   treated as tab/word breaks by the word code at 863DH [HYPOTHESIS: tab glyphs].
+//!   (every 10th), `83` (a margin), `84` (a tab stop) and `87` (the cursor's column) (builder
+//!   at E4E0H; confirmed by typing). `89` is treated as a tab/word break by the word code at
+//!   863DH [HYPOTHESIS: a tab character in text].
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
-//! - `B0`: an empty per-character attribute slot; status rows have one before every
-//!   character, the top line two. [HYPOTHESIS: it also ends the attribute it replaces, which
-//!   is what makes the one-character cursor work.]
+//! - `B0`: a per-character attribute slot: the next character is white on black. The title and
+//!   status rows have one before every character (the title two), and text rows have none.
+//!   [HYPOTHESIS, chosen because it gives the user's reverse rows.]
+//! - `80`-`8F` (the ruler glyphs) are drawn white on black by the character ROM itself
+//!   [HYPOTHESIS: the ruler has no slots but is reverse on the real screen].
 //! - `B1`: end of the screen (the walker at 8580H substitutes B1 for a link to 0000H).
 //! - `B2`: filler (skipped like B0 by 8580H).
 //! - `B4`/`B5`: half-line down/up (sub/superscript; the printer path at 9C64H moves +2/-2).
-//! - `C0`: starts every row and ends every status message [HYPOTHESIS: attributes off].
+//! - `C0`: starts every row and ends every status message.
 //! - `C1 xx`: horizontal scroll for the rows that follow: the first visible column is
-//!   `NOT xx` (routine BAC6H steps it to keep the cursor in an 80-column window).
+//!   `NOT xx` (routine BAC6H steps it to keep the cursor in an 80-column window). `C1 FF`
+//!   (no scroll) brackets the title and status rows, which never scroll.
 //! - `C2 lo hi`: jump to `hi lo`; a jump to 0000H ends the screen.
 //! - `C3 a a b b`: a disarmed jump (E6BAH flips C2 <-> C3 to hide/show an optional row);
 //!   display continues at `b b` (which the builder sets to the byte after it).
-//! - `C4`: the cursor: the blink routine at 93C0H flips a B0 slot to C4 and back.
-//!   [HYPOTHESIS: C4-CF set attributes; bit 2 = reverse video (the cursor), bit 3 = underline.]
+//! - `C4`: the cursor: the blink routine at 93C0H swaps a B0 slot with C4 and back. The next
+//!   character is shown inverted, so on a white-on-black row it is one black-on-white cell.
 
 /// Columns in the visible window (the builder writes 80-column rows; BAC6H scrolls by 50H).
 pub const WINDOW_COLS: usize = 80;
@@ -38,8 +45,8 @@ pub const WINDOW_COLS: usize = 80;
 pub struct Cell {
     /// The character ROM code (00-AF).
     pub code: u8,
+    /// White on black (the screen's normal is black on white).
     pub reverse: bool,
-    pub underline: bool,
 }
 
 /// Why the walk stopped.
@@ -70,8 +77,11 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
     let mut row: Vec<Cell> = Vec::new();
     let mut col = 0usize; // logical column within the row, before scrolling
     let mut scroll = 0usize;
-    let mut reverse = false;
-    let mut underline = false;
+    // Attributes for the next visible character, set by the slot codes before it.
+    let mut slot_reverse = false;
+    let mut cursor = false;
+    // Whether this row uses attribute slots (B0/C4), i.e. is a white-on-black row.
+    let mut row_has_slots = false;
     let mut unknown: Vec<u8> = Vec::new();
     let mut jumped_to: Vec<u16> = Vec::new();
     let mut addr = head;
@@ -84,14 +94,19 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                 0x0D => {
                     rows.push(std::mem::take(&mut row));
                     col = 0;
+                    slot_reverse = false;
+                    cursor = false;
+                    row_has_slots = false;
                     if rows.len() >= max_rows {
                         break 'walk Ending::RowLimit;
                     }
                 }
-                0xB0 | 0xC0 => {
-                    reverse = false;
-                    underline = false;
+                0xB0 => {
+                    slot_reverse = true;
+                    row_has_slots = true;
                 }
+                0xC4 => cursor = true,
+                0xC0 => {}
                 0xB1 => break 'walk Ending::EndMark(addr),
                 0xC1 => {
                     scroll = (!read(next)) as usize;
@@ -111,20 +126,22 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     addr = to;
                     continue;
                 }
-                0xC4..=0xCF => {
-                    reverse = b & 0x04 != 0;
-                    underline = b & 0x08 != 0;
-                }
-                0xB2..=0xBF | 0xD0..=0xFF => {
+                0xB2..=0xBF | 0xC5..=0xFF => {
                     let known = matches!(b, 0xB2 | 0xB4 | 0xB5);
                     if !known && !unknown.contains(&b) {
                         unknown.push(b);
                     }
                 }
                 _ => {
+                    let rom_inverse = (0x80..=0x8F).contains(&b);
+                    // The cursor cell is the opposite of its row: black on white in a slotted
+                    // (white-on-black) row, white on black in a text row.
+                    let reverse = if cursor { !row_has_slots } else { slot_reverse || rom_inverse };
                     if col >= scroll && col < scroll + WINDOW_COLS {
-                        row.push(Cell { code: b, reverse, underline });
+                        row.push(Cell { code: b, reverse });
                     }
+                    slot_reverse = false;
+                    cursor = false;
                     col += 1;
                 }
             }
@@ -148,8 +165,9 @@ pub fn glyph(code: u8) -> char {
         0x81 => ':', // ruler: every 5th column
         0x82 => '|', // ruler: every 10th column
         0x83 => 'M', // ruler: a margin (left and right)
+        0x84 => '>', // ruler: a tab stop
         0x87 => '^', // ruler: the cursor's column (moves as you type)
-        0x84 | 0x89 => '>', // [HYPOTHESIS] tab glyphs
+        0x89 => '>', // [HYPOTHESIS] a tab in text
         _ => '?',
     }
 }
@@ -165,25 +183,28 @@ impl CptScreen {
         s
     }
 
-    /// The screen with ANSI escapes for reverse video and underline (for a terminal).
+    /// The screen with ANSI colours: black on white for normal cells, white on black for
+    /// reverse ones, as on the CPT's own display. Each row is padded to the window width.
     pub fn to_ansi(&self) -> String {
+        const NORMAL: &str = "\x1b[30;47m";
+        const REVERSE: &str = "\x1b[37;40m";
         let mut s = String::new();
         for row in &self.rows {
-            let mut cur = (false, false);
+            let mut cur: Option<bool> = None;
             for c in row {
-                if (c.reverse, c.underline) != cur {
-                    s.push_str("\x1b[0m");
-                    if c.reverse { s.push_str("\x1b[7m"); }
-                    if c.underline { s.push_str("\x1b[4m"); }
-                    cur = (c.reverse, c.underline);
+                if cur != Some(c.reverse) {
+                    s.push_str(if c.reverse { REVERSE } else { NORMAL });
+                    cur = Some(c.reverse);
                 }
                 s.push(glyph(c.code));
             }
-            s.push_str("\x1b[0m");
-            for _ in row.len()..WINDOW_COLS {
-                s.push(' ');
+            // Pad: a row's colour carries on to its right edge on the real screen.
+            let pad_reverse = row.last().map(|c| c.reverse).unwrap_or(false);
+            if row.len() < WINDOW_COLS {
+                s.push_str(if pad_reverse { REVERSE } else { NORMAL });
+                s.push_str(&" ".repeat(WINDOW_COLS - row.len()));
             }
-            s.push('\n');
+            s.push_str("\x1b[0m\n");
         }
         s
     }
@@ -209,6 +230,11 @@ impl CptScreen {
         }
         out
     }
+
+    /// Whether row `r` is all white on black (and not empty).
+    pub fn row_is_reverse(&self, r: usize) -> bool {
+        self.rows.get(r).map_or(false, |row| !row.is_empty() && row.iter().all(|c| c.reverse))
+    }
 }
 
 #[cfg(test)]
@@ -226,17 +252,21 @@ mod tests {
         s.rows[r].iter().map(|c| glyph(c.code)).collect()
     }
 
+    fn rev(s: &CptScreen, r: usize) -> Vec<bool> {
+        s.rows[r].iter().map(|c| c.reverse).collect()
+    }
+
     #[test]
     fn rows_links_and_end_mark() {
         // head: C2 -> 0x1010; row "AB"; C0 0D blank row; B1 end.
         let mut l = vec![0xC2, 0x10, 0x10];
         l.resize(0x10, 0);
-        l.extend([0xC0, b'A', 0xB0, b'B', 0x0D, 0xC0, 0x0D, 0xB1, 0x0D]);
+        l.extend([0xC0, b'A', b'B', 0x0D, 0xC0, 0x0D, 0xB1, 0x0D]);
         let s = run(0x1000, &l, 0x1000);
         assert_eq!(s.rows.len(), 2);
         assert_eq!(text(&s, 0), "AB");
         assert_eq!(text(&s, 1), "");
-        assert_eq!(s.ending, Ending::EndMark(0x1017));
+        assert_eq!(s.ending, Ending::EndMark(0x1016));
     }
 
     #[test]
@@ -280,19 +310,55 @@ mod tests {
     }
 
     #[test]
-    fn cursor_reverses_one_character() {
-        // Status-row style: a B0 slot before every character; the cursor slot is C4.
-        let s = run(0x5000, &[0xC0, 0xB0, b'a', 0xC4, b'b', 0xB0, b'c', 0x0D, 0xB1], 0x5000);
-        let rev: Vec<bool> = s.rows[0].iter().map(|c| c.reverse).collect();
-        assert_eq!(rev, [false, true, false]);
-        assert_eq!(s.reverse_runs(), vec![(0, 1, 1)]);
-        assert!(s.to_ansi().contains("\x1b[7mb"));
+    fn slot_rows_are_reverse_and_text_rows_are_not() {
+        // A status-style row (B0 before each character), a title-style row (two slots) and a
+        // plain text row.
+        let s = run(0x5000, &[
+            0xC0, 0xB0, b'a', 0xB0, b'b', 0x0D,
+            0xC0, 0xB0, 0xB0, b'T', 0xB0, 0xB0, b'i', 0x0D,
+            0xC0, b'H', b'i', 0x0D, 0xB1,
+        ], 0x5000);
+        assert!(s.row_is_reverse(0));
+        assert!(s.row_is_reverse(1));
+        assert_eq!(rev(&s, 2), [false, false]);
+        // A character in a slot row without its slot is black on white.
+        let s = run(0x5000, &[0xC0, 0xB0, b'a', b'1', 0xB0, b'b', 0x0D, 0xB1], 0x5000);
+        assert_eq!(rev(&s, 0), [true, false, true]);
     }
 
     #[test]
-    fn zero_width_codes_and_ruler_glyphs() {
-        let s = run(0x6000, &[0xC0, 0x87, 0x80, 0xB2, 0x81, 0xB4, 0x82, 0x83, 0xA0, 0xD7, 0x0D, 0xB1], 0x6000);
-        assert_eq!(text(&s, 0), "^.:|M ");
+    fn the_ruler_glyphs_are_white_on_black() {
+        let s = run(0x6000, &[0xC0, 0x83, 0x80, 0x81, 0x87, 0x82, 0x84, 0x83, 0x0D, 0xB1], 0x6000);
+        assert_eq!(text(&s, 0), "M.:^|>M");
+        assert!(s.row_is_reverse(0));
+    }
+
+    #[test]
+    fn the_cursor_is_one_inverted_cell() {
+        // The blink routine swaps a B0 slot for C4: on a white-on-black row the cursor
+        // character is black on white.
+        let s = run(0x5000, &[0xC0, 0xB0, b'a', 0xC4, b'b', 0xB0, b'c', 0x0D, 0xB1], 0x5000);
+        assert_eq!(rev(&s, 0), [true, false, true]);
+        // In the title's double slots, one swapped slot inverts the character too.
+        let s = run(0x5000, &[0xC0, 0xB0, 0xB0, b'a', 0xC4, 0xB0, b'b', 0x0D, 0xB1], 0x5000);
+        assert_eq!(rev(&s, 0), [true, false]);
+        // In a text row (no slots) a cursor cell is white on black.
+        let s = run(0x5000, &[0xC0, b'a', 0xC4, b'b', 0x0D, 0xB1], 0x5000);
+        assert_eq!(rev(&s, 0), [false, true]);
+    }
+
+    #[test]
+    fn ansi_output_uses_black_on_white_and_white_on_black() {
+        let s = run(0x5000, &[0xC0, 0xB0, b'a', 0x0D, 0xC0, b'b', 0x0D, 0xB1], 0x5000);
+        let a = s.to_ansi();
+        assert!(a.contains("\x1b[37;40ma"), "reverse row: {:?}", a);
+        assert!(a.contains("\x1b[30;47mb"), "normal row: {:?}", a);
+    }
+
+    #[test]
+    fn zero_width_codes_and_unknown_codes() {
+        let s = run(0x6000, &[0xC0, b'x', 0xB2, b'y', 0xB4, b'z', 0xA0, 0xD7, 0x0D, 0xB1], 0x6000);
+        assert_eq!(text(&s, 0), "xyz ");
         assert_eq!(s.unknown_codes, vec![0xD7]);
     }
 }
