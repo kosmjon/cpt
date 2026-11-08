@@ -245,3 +245,16 @@ fn skip_discards_the_lower_screen_by_unit() {
     let out = boot_with(&img, "115000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{7E}{ms 400}{2F}{ms 4000}", "--keys-at", "80000000"]);
     assert!(last_row(&out, "  48 |").starts_with("  48 |August 19, 1987"), "LINE, SKIP: the format line is gone:\n{}", out);
 }
+
+/// The speaker (8253 counter 0): start-up plays sound 1 from the table at 1581H (2000 Hz for
+/// 100 ms, then 1000 Hz for 250 ms), and IN clicks (sound 0: 1333 Hz for 50 ms).
+#[test]
+fn the_speaker_chimes_at_start_up_and_clicks_on_in() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "100000000", &["--keys", "{3D}", "--keys-at", "80000000"]);
+    // "speaker (6 changes): 43725401: 2000 Hz, 43932427: off, ..." -> ["2000 Hz", "off", ...]
+    let spk = out.lines().find(|l| l.starts_with("speaker (")).expect("speaker line");
+    let list = spk.split_once("): ").expect("speaker list").1;
+    let tones: Vec<&str> = list.split(", ").map(|e| e.split_once(": ").map_or(e, |(_, t)| t)).collect();
+    assert_eq!(tones, ["2000 Hz", "off", "1000 Hz", "off", "1333 Hz", "off"], "{}", spk);
+}

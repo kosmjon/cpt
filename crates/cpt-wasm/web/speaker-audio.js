@@ -8,7 +8,7 @@
 // little ahead of "now" and carries on.
 //
 // Browsers only allow audio after a user gesture, so enable() must be called from one (the
-// CODE + WORDPAK click does that).
+// page does it on the first click or key).
 
 const SPEAKER_LEAD = 0.06; // seconds of headroom when (re)anchoring
 const SPEAKER_MIN_LEAD = 0.02; // anything scheduled closer to "now" than this counts as late

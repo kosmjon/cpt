@@ -18,6 +18,11 @@
 use crate::device::Device;
 use std::any::Any;
 
+// The speaker [CONFIRMED by disassembly]: the sound routine at 153AH plays a note by writing
+// control word 36H (counter 0, LSB then MSB, mode 3 = square wave) and a count to 1CH, waits,
+// then writes 30H (counter 0, mode 0), which silences it. Counter 0 is not wired to an
+// interrupt; its output drives the speaker.
+
 #[derive(Clone, Copy, Default)]
 struct Counter {
     /// Reload value (0 means 65536).
@@ -47,7 +52,17 @@ pub struct Pit8253 {
     sub: u32,
     /// Output pulses per counter, for diagnostics.
     pub pulses: [u64; 3],
+    /// CPU cycles since the 8253 was created (the time stamp for speaker events).
+    cycle: u64,
+    /// The speaker's current tone: counter 0's count while it runs in mode 3, else None.
+    tone: Option<u32>,
+    /// Speaker changes not yet taken, as (cycle, count): the speaker plays a square wave of
+    /// 2 MHz / count from that cycle on, or is silent if count is 0.
+    pub speaker: Vec<(u64, u32)>,
 }
+
+/// The 8253's input clock (Hz): the CPU's 2 MHz (counter 1's 16000 gives the 125 Hz tick).
+pub const PIT_CLOCK_HZ: u32 = 2_000_000;
 
 impl Pit8253 {
     /// An 8253 at `base`..`base+3`, counters 0-2 raising the given RST vectors.
@@ -58,7 +73,29 @@ impl Pit8253 {
             c.rl = 3;
         }
         Pit8253 { base, ports: [base, base + 1, base + 2, base + 3], counters, prescale: 1, sub: 0,
-                  pulses: [0; 3] }
+                  pulses: [0; 3], cycle: 0, tone: None, speaker: Vec::new() }
+    }
+
+    /// Take the speaker changes since the last call.
+    pub fn take_speaker(&mut self) -> Vec<(u64, u32)> {
+        std::mem::take(&mut self.speaker)
+    }
+
+    /// The speaker is sounding a tone now.
+    pub fn tone_on(&self) -> bool {
+        self.tone.is_some()
+    }
+
+    /// Record a speaker change if counter 0's tone changed: a square wave (mode 3) while it
+    /// runs, silence otherwise. The speaker is driven by counter 0's output (the CPT's sound
+    /// routine at 153AH plays notes this way; see program-disk.md).
+    fn speaker_update(&mut self) {
+        let c = &self.counters[0];
+        let tone = if c.running && c.mode & 3 == 3 { Some(c.reload) } else { None };
+        if tone != self.tone {
+            self.tone = tone;
+            self.speaker.push((self.cycle, tone.unwrap_or(0)));
+        }
     }
 
     /// The CPT wiring (guessed): counter 1 -> RST 5, counter 2 -> RST 7, at 1CH.
@@ -91,6 +128,9 @@ impl Pit8253 {
             c.reload = if v == 0 { 65536 } else { v };
             c.left = c.reload;
             c.running = true;
+        }
+        if n == 0 {
+            self.speaker_update();
         }
     }
 }
@@ -130,9 +170,13 @@ impl Device for Pit8253 {
         c.mode = (val >> 1) & 7;
         c.have_low = false;
         c.running = false; // a new control word stops the counter until it is loaded
+        if sel == 0 {
+            self.speaker_update();
+        }
     }
 
     fn tick(&mut self, cycles: u32) {
+        self.cycle += cycles as u64;
         self.sub += cycles;
         let clocks = self.sub / self.prescale;
         self.sub %= self.prescale;

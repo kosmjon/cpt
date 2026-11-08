@@ -72,3 +72,30 @@ fn acknowledges_are_recorded() {
     a.io_out(0x00, 0x20);
     assert_eq!(a.acks, vec![(0x80, 2), (0x20, 1)]);
 }
+
+/// The speaker is counter 0: the sound routine at 153AH plays a note with control word 36H
+/// (mode 3, a square wave) and a count, then silences it with 30H (mode 0). Each change is
+/// recorded with its cycle.
+#[test]
+fn counter_0_in_mode_3_is_the_speaker() {
+    let mut p = Pit8253::cpt();
+    p.tick(100);
+    // Sound 0: 1500 -> 1333 Hz.
+    p.io_out(0x1F, 0x36);
+    p.io_out(0x1C, 0xDC);
+    assert!(p.speaker.is_empty(), "no tone until the count is complete");
+    p.io_out(0x1C, 0x05);
+    assert!(p.tone_on());
+    p.tick(100_000); // 50 ms
+    p.io_out(0x1F, 0x30);
+    assert!(!p.tone_on());
+    // The off writes the same count in mode 0: still silent.
+    p.io_out(0x1C, 0xDC);
+    p.io_out(0x1C, 0x05);
+    assert_eq!(p.take_speaker(), vec![(100, 1500), (100_100, 0)]);
+    assert!(p.take_speaker().is_empty(), "taken");
+    // The other counters never sound.
+    program(&mut p, 1, 16000);
+    program(&mut p, 2, 20000);
+    assert!(p.speaker.is_empty());
+}

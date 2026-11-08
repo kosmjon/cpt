@@ -172,21 +172,28 @@ class RealCpt {
     return Math.min(1, this.cycles / this.w.cpt_real_settled_cycles());
   }
 
-  // Run the machine for one animation frame.
+  get toneOn() {
+    return this.w.cpt_real_speaker_on() === 1;
+  }
+
+  // Run the machine for one animation frame. `this.turbo` says whether this frame ran ahead
+  // of real time.
   frame() {
     const wall = this.now();
-    if (!this.settled) {
-      // Turbo: run in chunks until the frame's budget is used.
+    // Turbo until settled, except while the speaker sounds (so notes play at true length).
+    this.turbo = !this.settled && !this.toneOn;
+    if (this.turbo) {
+      // Run in chunks until the frame's budget is used, or a tone starts.
       const until = wall + this.turboBudgetMs;
       do {
         this.w.cpt_real_run(this.turboChunk);
-      } while (!this.settled && this.now() < until);
+      } while (!this.settled && !this.toneOn && this.now() < until);
       this.lastWall = this.now();
       return;
     }
     // Real time: the cycles that match the wall time since the last frame (at most 0.1 s, so
     // a background tab doesn't come back to a long catch-up).
-    const dt = this.lastWall === null ? 1000 / 60 : Math.min(100, wall - this.lastWall);
+    const dt = this.lastWall === null ? 1000 / 60 : Math.min(100, Math.max(0, wall - this.lastWall));
     this.lastWall = wall;
     this.w.cpt_real_run(Math.round((dt / 1000) * REAL_CPU_HZ));
   }
@@ -248,6 +255,18 @@ class RealCpt {
     return k < 0 ? null : { key: k & 0x7f, shift: (k & 0x100) !== 0 };
   }
 
+  // The speaker changes since the last call: { buf, count } with buf a Float64Array of
+  // [cycle, count] pairs (a view into wasm memory, valid until the next call into wasm).
+  // Play them with SpeakerAudio(…, REAL_CPU_HZ, this.toneHz).
+  speakerTake() {
+    const count = this.w.cpt_real_speaker_take();
+    return { count, buf: new Float64Array(this.w.memory.buffer, this.w.cpt_real_speaker_ptr(), count * 2) };
+  }
+
+  get toneHz() {
+    return this.w.cpt_real_tone_hz();
+  }
+
   // Drive state for the UI: { loaded, modified, active } for drive 0 (station 1) or 1.
   drive(d) {
     const s = this.w.cpt_real_drive_state(d);
@@ -257,5 +276,5 @@ class RealCpt {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { RealCpt, CPT_KEY, SPECIAL_LABEL_KEYS, PC_NAMED_KEYS, REAL_SCREEN_ROWS, cptGlyph, pcKeyChar };
+  module.exports = { RealCpt, CPT_KEY, SPECIAL_LABEL_KEYS, PC_NAMED_KEYS, REAL_SCREEN_ROWS, REAL_CPU_HZ, cptGlyph, pcKeyChar };
 }

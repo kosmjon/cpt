@@ -269,6 +269,13 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let pit = exec.machine.device_mut(pit_dev).unwrap().as_any_mut().downcast_mut::<cpt_machine::Pit8253>().unwrap();
     println!("\n8253: counter reloads {:?}, output pulses {:?}",
         [pit.reload(0), pit.reload(1), pit.reload(2)], pit.pulses);
+    // The speaker (8253 counter 0): each tone as "cycle: Hz" (or "off").
+    let spk = pit.take_speaker();
+    let shown: Vec<String> = spk.iter().take(40).map(|&(c, n)| {
+        if n == 0 { format!("{}: off", c) }
+        else { format!("{}: {:.0} Hz", c, cpt_machine::cpt_interrupts::PIT_CLOCK_HZ as f64 / n as f64) }
+    }).collect();
+    println!("speaker ({} changes): {}", spk.len(), if shown.is_empty() { "(silent)".into() } else { shown.join(", ") });
     let ack = exec.machine.device_mut(ack_dev).unwrap().as_any_mut().downcast_mut::<cpt_machine::InterruptAck>().unwrap();
     let acks: Vec<String> = ack.acks.iter().map(|(v, n)| format!("{:02X}x{}", v, n)).collect();
     println!("interrupt acknowledges on 00H: {}", if acks.is_empty() { "(none)".into() } else { acks.join(" ") });

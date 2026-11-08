@@ -31,6 +31,7 @@ async function main() {
   const statusEl = document.getElementById("status");
 
   const ws = { w, real, powered: true };
+  ws.speaker = setupSpeaker(real);
   const keys = setupKeyboard(ws);
   const drives = setupDrives(ws);
   setupPower(ws, keys, drives);
@@ -43,6 +44,7 @@ async function main() {
       statusEl.textContent = "power is off";
     } else if (real.running) {
       real.frame();
+      ws.speaker.onFrame(ws.powered);
       drawRealScreen(ctx, canvas, real);
       statusEl.textContent = real.settled
         ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN)"
@@ -89,6 +91,50 @@ function drawRealScreen(ctx, canvas, real) {
       ctx.fillRect((last + 1) * CELL_W, y, (s.cols - last - 1) * CELL_W, CELL_H);
     }
   }
+}
+
+// The speaker: the system's tone changes (8253 counter 0) played on a Web Audio square wave.
+// Browsers only allow audio after a user gesture, so sound starts with the first click or key
+// on the page. During the faster-than-real-time start-up, each frame's changes play from "now"
+// with their real spacing (so the start-up chime keeps its note lengths); real-time running
+// re-anchors the timing. Nothing plays with the power off.
+function setupSpeaker(real) {
+  const Ctor = typeof window !== "undefined" ? window.AudioContext || window.webkitAudioContext : undefined;
+  const audio = new SpeakerAudio(Ctor, REAL_CPU_HZ, real.toneHz);
+  let wanted = false;
+  function gesture() {
+    if (!wanted) return;
+    if (audio.enable()) wanted = false;
+  }
+  if (typeof window !== "undefined") {
+    for (const t of ["pointerdown", "keydown"]) window.addEventListener(t, gesture, true);
+  }
+  wanted = true;
+  let wasTurbo = true;
+  return {
+    // Called once per frame, after the machine has run: play its tone changes.
+    onFrame(powered) {
+      if (!real.running) return;
+      const { buf, count } = real.speakerTake();
+      // A frame that ran ahead of real time: play its batch from now. While a tone sounds the
+      // page runs in real time, keeping the anchor, so a note's on and off keep their spacing
+      // across frames. When real time begins with no tone sounding (start-up has settled),
+      // emulated time has run ahead of the old anchor, so start a fresh one.
+      if (real.turbo || (wasTurbo && !real.toneOn)) audio.reanchor();
+      wasTurbo = real.turbo;
+      if (powered && count > 0) audio.schedule(buf, count);
+    },
+    // A new run (reset, power on): forget the old timing and silence any held tone.
+    restart() {
+      audio.disable();
+      wanted = true;
+      gesture(); // power and reset are clicks, so this is inside a gesture
+    },
+    off() {
+      audio.disable();
+      wanted = true;
+    },
+  };
 }
 
 // The two 8-inch drives. Each has one button with a red activity LED:
@@ -188,14 +234,20 @@ function setupPower(ws, keys, drives) {
   powerBtn.addEventListener("click", () => {
     keys.releaseAll();
     ws.powered = !ws.powered;
-    if (ws.powered) real.start();
-    else real.halt();
+    if (ws.powered) {
+      ws.speaker.restart();
+      real.start();
+    } else {
+      ws.speaker.off();
+      real.halt();
+    }
     show();
     drives.update();
   });
   resetBtn.addEventListener("click", () => {
     if (!ws.powered) return;
     keys.releaseAll();
+    ws.speaker.restart();
     real.start(); // stops the running system first; waits if drive 1 is empty
   });
   show();

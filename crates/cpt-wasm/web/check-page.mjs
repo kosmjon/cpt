@@ -107,9 +107,40 @@ const document = {
   },
   createElement: (tag) => el(tag),
 };
+// A mock Web Audio context: it records what the page schedules (pitch changes and gain
+// changes, with their audio-clock times).
+const audioLog = []; // { what: "freq" | "gain", value, t }
+class MockAudioContext {
+  constructor() {
+    this.destination = {};
+  }
+  get currentTime() {
+    return performance.now() / 1000;
+  }
+  resume() {}
+  createOscillator() {
+    return {
+      type: "",
+      frequency: { value: 0, setValueAtTime: (v, t) => audioLog.push({ what: "freq", value: v, t }) },
+      connect() {},
+      start() {},
+    };
+  }
+  createGain() {
+    return {
+      gain: {
+        value: 0,
+        setTargetAtTime: (v, t) => audioLog.push({ what: "gain", value: v, t }),
+        setValueAtTime: (v, t) => audioLog.push({ what: "gain", value: v, t }),
+        cancelScheduledValues() {},
+      },
+      connect() {},
+    };
+  }
+}
 const fakeWindow = {
   addEventListener: (t, f) => (windowListeners[t] ||= []).push(f),
-  AudioContext: undefined,
+  AudioContext: MockAudioContext,
 };
 
 const wasmBytes = await readFile(new URL("./cpt_wasm.wasm", import.meta.url));
@@ -122,14 +153,14 @@ Object.assign(globalThis, {
   fetch: async () => ({ arrayBuffer: async () => wasmBytes }),
 });
 // The page's classic scripts declare globals; load them the same way.
-Object.assign(globalThis, require("./real-cpt.js"));
+Object.assign(globalThis, require("./speaker-audio.js"), require("./real-cpt.js"));
 vm.runInThisContext(await readFile(new URL("./cpt.js", import.meta.url), "utf8"), { filename: "cpt.js" });
 
 async function frames(n) {
   for (let i = 0; i < n; i++) {
     const f = rafCallback;
     rafCallback = null;
-    assert.ok(f, "the page keeps requesting frames");
+    assert.ok(f, `the page keeps requesting frames (status: "${status.textContent}")`);
     f(performance.now());
     await new Promise((r) => setImmediate(r));
   }
@@ -165,6 +196,8 @@ assert.equal(status.textContent, "insert a CPT program disk in drive 1");
 assert.ok(powerBtn.sub[".led"].classList.contains("on"), "the power LED is on");
 assert.equal(drives[0].classList.contains("loaded"), false);
 
+// The first click on the page is the gesture that lets the page start audio.
+for (const f of windowListeners.pointerdown || []) f({});
 // Insert the program disk in drive 1.
 await drives[0].sub[".drive-btn"].dispatch("click");
 const image = new Uint8Array(await readFile(imagePath));
@@ -181,6 +214,24 @@ while (!status.textContent.startsWith("CPT system running") && n < 2000) {
 }
 console.log(`started in ${n} frames, ${((performance.now() - t0) / 1000).toFixed(2)} s; status: "${status.textContent}"`);
 assert.ok(status.textContent.startsWith("CPT system running"), status.textContent);
+
+// The start-up chime (sound 1): 2000 Hz for 100 ms, then 1000 Hz for 250 ms, at true length
+// even though start-up runs ahead of real time (the page drops to real time while it sounds).
+{
+  const on = audioLog.filter((e) => e.what === "gain" && e.value > 0);
+  const off = audioLog.filter((e) => e.what === "gain" && e.value === 0);
+  const freqs = audioLog.filter((e) => e.what === "freq").map((e) => Math.round(e.value));
+  assert.deepEqual(freqs.slice(0, 2), [2000, 1000], `chime pitches: ${freqs}`);
+  const first = on[0].t;
+  const firstOff = off.find((e) => e.t > first).t;
+  const second = on.find((e) => e.t > firstOff).t;
+  const secondOff = off.find((e) => e.t > second).t;
+  const ms = (x) => Math.round(x * 1000);
+  console.log(`chime: 2000 Hz for ${ms(firstOff - first)} ms, 1000 Hz for ${ms(secondOff - second)} ms`);
+  // Within one 10 ms tick: the system times notes on its 100 Hz tick.
+  assert.ok(Math.abs(ms(firstOff - first) - 100) <= 10, "the 2000 Hz note lasts 100 ms");
+  assert.ok(Math.abs(ms(secondOff - second) - 250) <= 10, "the 1000 Hz note lasts 250 ms");
+}
 await frames(1);
 assert.ok(rowText(46).startsWith("^...:....|....:....|"), `ruler drawn: "${rowText(46)}"`);
 const allDark = (r) => [...Array(80).keys()].every((c) => frameDark.has(`${r},${c}`));
@@ -190,12 +241,20 @@ assert.ok(/ 1 {4}0/.test(rowText(0)), `the status is at the title's right end (b
 assert.ok(!frameDark.has("45,0"), "the typing line is black on white");
 assert.ok(!rowText(47).includes(" 1    0"), "no separate status row under the ruler");
 
-// Type IN (on the special-key panel), then "legal" and RETURN on the PC keyboard.
+// Type IN (on the special-key panel), then "legal" and RETURN on the PC keyboard. IN clicks
+// (sound 0: 1333 Hz for 50 ms), in real time now.
 const inKey = specialKeys.children.find((k) => k.dataset && k.dataset.label === "IN");
 assert.ok(inKey, "the IN key is on the panel");
+const logBefore = audioLog.length;
 await inKey.dispatch("click");
 await sleep(80);
 await frames(2);
+for (let i = 0; i < 10 && !audioLog.slice(logBefore).some((e) => e.what === "freq"); i++) {
+  await sleep(50);
+  await frames(1);
+}
+const click = audioLog.slice(logBefore).find((e) => e.what === "freq");
+assert.ok(click && Math.round(click.value) === 1333, `IN clicks at 1333 Hz (${click && click.value})`);
 for (const c of ["KeyL", "KeyE", "KeyG", "KeyA", "KeyL", "Enter"]) await tap(c);
 // Let the filer read the document (a few seconds of emulated time, in real time).
 for (let i = 0; i < 40 && !rowText(45).startsWith("T.017-5"); i++) {

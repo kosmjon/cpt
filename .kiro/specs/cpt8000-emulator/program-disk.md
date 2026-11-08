@@ -345,6 +345,34 @@ The top line's prompt has two `B0` slots per character, room for per-character a
 7FFBH–7FFFH (`C0 0D C2 FB 7F`) is a blank row that loops to itself: the loader points the head
 there to show an empty screen.
 
+## The speaker **[CONFIRMED by disassembly and by running it]**
+
+The speaker is driven by the 8253's **counter 0** (port 1CH; control port 1FH). Counter 0
+raises no interrupt. The sound routine at **153AH** takes a sound number in A and plays every
+entry for that number in the table at **1581H**. Each entry is 7 bytes:
+- the sound number;
+- the "on" control word (`36H`: counter 0, LSB then MSB, mode 3 = square wave), or 00 for a
+  rest;
+- the "off" control word (`30H`: counter 0, mode 0 = silent);
+- the count (2 bytes, little-endian), giving 2 MHz / count;
+- the duration (2 bytes) in ticks of the 100 Hz task timer (routine 1603H waits on 04A6H).
+
+The table ends with `FF`.
+
+| Sound | Notes | Heard when |
+|---|---|---|
+| 0 | 1,333 Hz for 50 ms | a key click: IN, PAGE (typed letters are silent) |
+| 1 | 2,000 Hz for 100 ms, then 1,000 Hz for 250 ms | start-up, about 22 s in |
+| 2 | a rest | |
+| 3 | 1,600 Hz for 100 ms, then 1,333 Hz for 100 ms | not yet seen |
+| 4 | 256 Hz for 250 ms | not yet seen (an error buzz?) |
+| 63H | two empty entries | |
+
+The tones confirm the 8253 runs at the CPU's 2 MHz. Played in the browser, the user confirmed
+the start-up chime and key clicks sound as they remember them from the real CPT. No separate speaker on/off port has been
+found; mode 0 alone silences it. `cpt-run --cpt-boot` lists the speaker changes ("speaker (6
+changes): …"), and the browser plays them.
+
 ## The keyboard **[CONFIRMED by disassembly and by typing]**
 
 - **RST 2** (handler 0D07H). IN 01H bit 7 means an event is ready, and IN 02H gives it,

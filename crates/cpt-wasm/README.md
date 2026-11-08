@@ -128,13 +128,24 @@ drive 1: power on or reset), `cpt_real_halt` (power off), `cpt_real_running`, `c
 `cpt_real_key_for_char`, `cpt_real_drive_state`, `cpt_real_disk_bytes`. While no system is
 running, the disks wait in their drives inside the module.
 
-## Speaker (the earlier demo)
+## Speaker
 
-The earlier demo machine played a melody through the Web Audio API: latching **CODE** and
-pressing **WORDPAK** started it. The page no longer runs the demo, so this is gone from the
-page. The real system's speaker isn't modelled yet (8253 counter 0 was seen being programmed
-when a document opened, probably a beep). The demo's audio path is still in the module and
-checked by `check-audio.mjs`.
+The real system's speaker plays through the Web Audio API. It is the 8253's counter 0: the
+system plays a note by putting it in mode 3 (a square wave of 2 MHz / count) and silences it
+with mode 0 (see `program-disk.md`, "The speaker"). Each frame the page takes the tone changes
+(`cpt_real_speaker_take`, `cpt_real_speaker_ptr`, `cpt_real_tone_hz`) and `speaker-audio.js`
+schedules them on one square-wave oscillator, timed by the emulated clock.
+
+- Browsers only allow audio after a user gesture, so sound starts with your first click or key
+  on the page (inserting the disk is one).
+- Start-up plays a chime (2,000 Hz then 1,000 Hz). Start-up otherwise runs faster than real
+  time; the page drops to real time while a tone sounds (`cpt_real_speaker_on`), so notes keep
+  their true length.
+- IN, PAGE and other keys click (1,333 Hz for 50 ms). Nothing plays with the power off.
+
+`check-page.mjs` checks the chime's pitches and note lengths against a mock audio context.
+The earlier demo machine's melody (CODE + WORDPAK) is gone from the page with the demo; its
+audio path is still in the module and checked by `check-audio.mjs`.
 
 How it works:
 - `cpt_run_frame` leaves the frame's speaker events in a buffer of f64 pairs (CPU cycle,

@@ -616,6 +616,52 @@ pub extern "C" fn cpt_real_key_for_char(ch: u32) -> i32 {
     }
 }
 
+// --- the real system's speaker (8253 counter 0) ---
+//
+// `cpt_real_speaker_take()` moves the speaker changes since the last call into a buffer of f64
+// pairs (CPU cycle, count) and returns how many there are; `cpt_real_speaker_ptr()` points at
+// it. A count of 0 means silence; otherwise the speaker plays a square wave of
+// 2 MHz / count. With `cpt_real_tone_hz()` (4 MHz) the page's SpeakerAudio plays
+// tone_hz / (2 * count), the same pitch.
+
+thread_local! {
+    static REAL_SPK: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_speaker_take() -> usize {
+    let events = REAL.with(|r| match r.borrow_mut().as_mut() {
+        Some(sys) => sys.pit().take_speaker(),
+        None => Vec::new(),
+    });
+    REAL_SPK.with(|b| {
+        let mut b = b.borrow_mut();
+        b.clear();
+        for (cycle, count) in &events {
+            b.push(*cycle as f64);
+            b.push(*count as f64);
+        }
+    });
+    events.len()
+}
+
+/// 1 if the speaker is sounding a tone now (the page runs in real time while it is).
+#[no_mangle]
+pub extern "C" fn cpt_real_speaker_on() -> u32 {
+    REAL.with(|r| r.borrow_mut().as_mut().map_or(0, |sys| sys.pit().tone_on() as u32))
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_speaker_ptr() -> *const f64 {
+    REAL_SPK.with(|b| b.borrow().as_ptr())
+}
+
+/// Twice the 8253's clock, so SpeakerAudio's tone_hz / (2 * count) is the speaker's pitch.
+#[no_mangle]
+pub extern "C" fn cpt_real_tone_hz() -> f64 {
+    2.0 * cpt_machine::cpt_interrupts::PIT_CLOCK_HZ as f64
+}
+
 /// Drive state for the UI: bit 0 = a disk is in, bit 1 = it has been written, bit 2 = it is
 /// being read or written right now. `drive` 0 = drive 1, 1 = drive 2. Works with or without a
 /// running system.
