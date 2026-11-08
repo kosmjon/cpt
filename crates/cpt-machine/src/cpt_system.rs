@@ -9,6 +9,7 @@ use crate::cpt_display::{self, CptScreen};
 use crate::cpt_floppy::{self, CptFloppy};
 use crate::cpt_interrupts::{InterruptAck, Pit8253};
 use crate::cpt_keyboard::CptKeyboard;
+use crate::cpt_usart::Usart8251;
 use crate::{DiskImage, Executive, Machine, MachineConfig, TimerDevice};
 use i8080_cpu::{Bus, Cpu};
 
@@ -35,6 +36,7 @@ pub struct CptSystem {
     pub pit: usize,
     pub ack: usize,
     pub kb: usize,
+    pub usart: usize,
 }
 
 impl CptSystem {
@@ -76,11 +78,15 @@ impl CptSystem {
         // The keyboard on 01H/02H, raising RST 2.
         let kb = machine.device_count();
         machine.attach_device(Box::new(CptKeyboard::new()));
+        // The serial port: an 8251 at 4AH/4BH (and 4CH), receive on RST 1, transmit on RST 4.
+        // Nothing is attached to the line until the host sets DSR and pumps it.
+        let usart = machine.device_count();
+        machine.attach_device(Box::new(Usart8251::cpt()));
 
         machine.mem.load_bank0(0, &boot_sector);
         let mut cpu = Cpu::new();
         cpu.pc = 0;
-        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb }
+        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb, usart }
     }
 
     /// Take both disks out (drive 1, drive 2), e.g. before a reset or power-off.
@@ -103,6 +109,10 @@ impl CptSystem {
 
     pub fn keyboard(&mut self) -> &mut CptKeyboard {
         self.exec.machine.device_mut(self.kb).unwrap().as_any_mut().downcast_mut().unwrap()
+    }
+
+    pub fn usart(&mut self) -> &mut Usart8251 {
+        self.exec.machine.device_mut(self.usart).unwrap().as_any_mut().downcast_mut().unwrap()
     }
 
     /// Decode the screen the display hardware would show now.

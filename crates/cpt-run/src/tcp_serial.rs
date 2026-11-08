@@ -12,7 +12,9 @@ use cpt_machine::Transport;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -95,6 +97,8 @@ impl TelnetFilter {
 pub struct TcpTransport {
     to_peer: Sender<Vec<u8>>,
     from_peer: Receiver<u8>,
+    /// Set by the reader thread when the peer closes the connection.
+    closed: Arc<AtomicBool>,
 }
 
 impl TcpTransport {
@@ -136,10 +140,20 @@ impl TcpTransport {
 
         // Reader thread: blocking reads from the socket, forwards bytes to the main thread.
         let read_stream = stream.try_clone().expect("clone TcpStream for reader");
+        let closed = Arc::new(AtomicBool::new(false));
+        let closed_by_reader = closed.clone();
         thread::spawn(move || {
             let mut s = read_stream;
             let mut buf = [0u8; 256];
             let mut filter = TelnetFilter::default();
+            // However the loop ends (peer closed, error), the connection is gone.
+            struct MarkClosed(Arc<AtomicBool>);
+            impl Drop for MarkClosed {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let _mark = MarkClosed(closed_by_reader);
             loop {
                 match s.read(&mut buf) {
                     Ok(0) => break, // peer closed
@@ -167,7 +181,11 @@ impl TcpTransport {
         let mut write_stream = stream;
         thread::spawn(move || loop {
             match rx_out.recv_timeout(Duration::from_millis(200)) {
-                Ok(bytes) => {
+                Ok(mut bytes) => {
+                    // In Telnet, a data byte FFH is sent doubled (IAC IAC).
+                    if telnet && bytes.contains(&IAC) {
+                        bytes = bytes.iter().flat_map(|&b| if b == IAC { vec![IAC, IAC] } else { vec![b] }).collect();
+                    }
                     if write_stream.write_all(&bytes).is_err() {
                         break;
                     }
@@ -181,7 +199,14 @@ impl TcpTransport {
         TcpTransport {
             to_peer: tx_out,
             from_peer: rx_in,
+            closed,
         }
+    }
+
+    /// Whether the peer has closed the connection (any bytes it sent are still in `recv`).
+    #[allow(dead_code)] // used by --cpt-boot; the test's #[path] copy doesn't call it
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 }
 

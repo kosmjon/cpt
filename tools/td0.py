@@ -74,10 +74,142 @@ def decode_sector_data(method, payload, size):
     return out
 
 
+def lzhuf_decode(data):
+    """Expand TeleDisk "advanced compression": Okumura's LZHUF (LZSS with a 4K window, matches
+    of 3-60 bytes, an adaptive Huffman code for literals/lengths and a fixed code for the
+    upper 6 bits of the match position). The stream has no length prefix; it runs to the end
+    of the file, so decoding stops when the input bits run out."""
+    N, F, THRESHOLD = 4096, 60, 2
+    N_CHAR = 256 - THRESHOLD + F
+    T = N_CHAR * 2 - 1
+    R = T - 1
+    MAX_FREQ = 0x8000
+
+    # Fixed code for the position's upper 6 bits: canonical, lengths 3..8 for 1, 3, 8, 12, 24
+    # and 16 values. d_code/d_len are indexed by the next 8 input bits.
+    d_code, d_len = [], []
+    value = 0
+    for length, count in ((3, 1), (4, 3), (5, 8), (6, 12), (7, 24), (8, 16)):
+        for _ in range(count):
+            d_code += [value] * (1 << (8 - length))
+            d_len += [length] * (1 << (8 - length))
+            value += 1
+
+    freq = [0] * (T + 1)
+    prnt = [0] * (T + N_CHAR)
+    son = [0] * T
+    for i in range(N_CHAR):
+        freq[i] = 1
+        son[i] = i + T
+        prnt[i + T] = i
+    i, j = 0, N_CHAR
+    while j <= R:
+        freq[j] = freq[i] + freq[i + 1]
+        son[j] = i
+        prnt[i] = prnt[i + 1] = j
+        i += 2
+        j += 1
+    freq[T] = 0xFFFF
+    prnt[R] = 0
+
+    def reconst():
+        j = 0
+        for i in range(T):
+            if son[i] >= T:
+                freq[j] = (freq[i] + 1) // 2
+                son[j] = son[i]
+                j += 1
+        i, j = 0, N_CHAR
+        while j < T:
+            f = freq[j] = freq[i] + freq[i + 1]
+            k = j - 1
+            while f < freq[k]:
+                k -= 1
+            k += 1
+            freq[k + 1:j + 1] = freq[k:j]
+            freq[k] = f
+            son[k + 1:j + 1] = son[k:j]
+            son[k] = i
+            i += 2
+            j += 1
+        for i in range(T):
+            k = son[i]
+            if k >= T:
+                prnt[k] = i
+            else:
+                prnt[k] = prnt[k + 1] = i
+
+    def update(c):
+        if freq[R] == MAX_FREQ:
+            reconst()
+        c = prnt[c + T]
+        while True:
+            freq[c] += 1
+            k = freq[c]
+            l = c + 1
+            if k > freq[l]:
+                while k > freq[l + 1]:
+                    l += 1
+                freq[c] = freq[l]
+                freq[l] = k
+                i = son[c]
+                prnt[i] = l
+                if i < T:
+                    prnt[i + 1] = l
+                j = son[l]
+                son[l] = i
+                prnt[j] = c
+                if j < T:
+                    prnt[j + 1] = c
+                son[c] = j
+                c = l
+            c = prnt[c]
+            if c == 0:
+                break
+
+    total_bits = len(data) * 8
+    bitpos = 0
+
+    def bits(n):
+        nonlocal bitpos
+        v = 0
+        for _ in range(n):
+            byte = bitpos >> 3
+            b = (data[byte] >> (7 - (bitpos & 7))) & 1 if byte < len(data) else 0
+            v = (v << 1) | b
+            bitpos += 1
+        return v
+
+    text = bytearray(b" " * N)
+    r = N - F
+    out = bytearray()
+    while bitpos < total_bits:
+        c = son[R]
+        while c < T:
+            c = son[c + bits(1)]
+        c -= T
+        update(c)
+        if c < 256:
+            out.append(c)
+            text[r] = c
+            r = (r + 1) & (N - 1)
+        else:
+            b = bits(8)
+            pos = (d_code[b] << 6) | (((b << (d_len[b] - 2)) | bits(d_len[b] - 2)) & 0x3F)
+            start = (r - pos - 1) & (N - 1)
+            for k in range(c - 255 + THRESHOLD):
+                ch = text[(start + k) & (N - 1)]
+                out.append(ch)
+                text[r] = ch
+                r = (r + 1) & (N - 1)
+    return bytes(out)
+
+
 def parse(blob):
     if blob[:2] == b"td":
-        raise TD0Error("advanced-compression (td) image: LZHUF decoding not implemented yet")
-    if blob[:2] != b"TD":
+        # Advanced compression: the 12-byte header is stored as is, the rest is LZHUF.
+        blob = blob[:12] + lzhuf_decode(blob[12:])
+    elif blob[:2] != b"TD":
         raise TD0Error("not a TeleDisk image (signature %r)" % blob[:2])
     hdr = blob[:12]
     want = hdr[10] | hdr[11] << 8

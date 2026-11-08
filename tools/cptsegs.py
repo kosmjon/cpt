@@ -23,16 +23,22 @@ import sys
 from collections import Counter
 
 # Functions identified so far (segment, function) -> what they do.
+# (No addresses here: they differ between program disks, and the map prints them.)
 KNOWN = {
-    (0x01, 0x00): "drive table lookup (0CDDH)",
-    (0x01, 0x01): "start a disk request (07DDH)",
-    (0x01, 0x02): "wait for a disk request, with retries (087CH)",
-    (0x01, 0x04): "look up a far function's address (1374H)",
-    (0x02, 0x02): "allocate a 256-byte display page (1632H)",
+    (0x01, 0x00): "drive table lookup",
+    (0x01, 0x01): "start a disk request",
+    (0x01, 0x02): "wait for a disk request, with retries",
+    (0x01, 0x04): "look up a far function's address",
+    (0x02, 0x02): "allocate a 256-byte display page",
+    (0x0C, 0x00): "load a document (the staple key's level; A = 1 open, 0 close)",
     (0x0C, 0x29): "filer: find a document / probe a drive (used at start-up)",
-    (0x3A, 0x00): "build the screen's display list (E4D0H)",
-    (0x3A, 0x0B): "swap the optional status row's jump C2/C3 (E6BAH)",
-    (0x3D, 0x0A): "keyboard: take the next key from the ring at 058BH (D74CH)",
+    (0x23, 0x00): "the editor loop",
+    (0x29, 0x01): "show a message",
+    (0x31, 0x00): "the staple key's nested level",
+    (0x3A, 0x00): "build the screen's display list",
+    (0x3A, 0x0B): "swap the optional status row's jump C2/C3",
+    (0x3D, 0x00): "get the next key (also plays PROG back)",
+    (0x3D, 0x0A): "keyboard: take the next key from the ring at 058BH",
 }
 
 
@@ -70,14 +76,14 @@ def main(argv):
         funcs = [word(bank, table + 1 + 2 * i) for i in range(n)]
         segs[s] = funcs
         where = "bank 0" if bank == 0 else f"block {bank - 1}"
-        print(f"  seg {s:02X}: {where:8} table {table:04X}H, {n:2} functions")
+        print(f"  seg {s:02X} ({s:3d}): {where:8} table {table:04X}H, {n:2} functions")
         for i, f in enumerate(funcs):
             if f and (s, i) in KNOWN:
-                print(f"           {i:02X}: {f:04X}H  {KNOWN[(s, i)]}")
+                print(f"                 {i:02X}: {f:04X}H  {KNOWN[(s, i)]}")
         rest = [f"{i:02X}:{f:04X}" for i, f in enumerate(funcs) if f and (s, i) not in KNOWN]
         for i in range(0, len(rest), 8):
-            print("           " + "  ".join(rest[i:i + 8]))
-    print(f"  not present now: {len(absent)} ({' '.join(f'{s:02X}' for s in absent)})")
+            print("                 " + "  ".join(rest[i:i + 8]))
+    print(f"  not present now: {len(absent)} ({' '.join(f'{s:02X}={s}' for s in absent)})")
 
     calls = Counter()
     for b in range(-1, (len(d) // 0x8000) - 1):
@@ -87,12 +93,12 @@ def main(argv):
                 calls[(m[i + 3], m[i + 4])] += 1
     missing = sorted({s for (s, _) in calls if s not in segs})
     print(f"\nfar calls (CALL 0046H, seg, func): {sum(calls.values())} sites, {len(calls)} distinct")
-    print(f"  to segments not present now: {' '.join(f'{s:02X}' for s in missing)}")
+    print(f"  to segments not present now: {' '.join(f'{s:02X}={s}' for s in missing)}")
     if show_calls:
         for (s, f), n in sorted(calls.items()):
             tgt = (f"-> {segs[s][f]:04X}H" if s in segs and f < len(segs[s])
                    else "(function out of range)" if s in segs else "(segment not present)")
-            print(f"  {s:02X}.{f:02X} x{n:<3} {tgt}  {KNOWN.get((s, f), '')}")
+            print(f"  {s:02X}.{f:02X} ({s:3d}.{f:<2d}) x{n:<3} {tgt}  {KNOWN.get((s, f), '')}")
     return 0
 
 

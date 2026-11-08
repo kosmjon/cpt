@@ -17,10 +17,18 @@
 //!   cpt-run --cpt-boot <image> [<cycles>] [<break addr>|-] [<read delay>] [<mem out>]
 //!           [--keys "<script>"] [--keys-at <cycle>] [--screen-at <cycle>]...
 //!           [--brk-after <cycle>] [--profile]
+//!           [--serial-listen <addr> [--serial-raw]] [--serial-in "<script>"]
+//!           [--serial-in-at <cycle>] [--live]
 //!                                          Boot a real CPT program disk on the real hardware
 //!                                          model, type a key script into it (see
 //!                                          `key_schedule`), and print the decoded screen.
 //!                                          Example: --keys "Hello{14}world" types two lines.
+//!                                          The serial port (8251 at 4AH/4BH) can be a Telnet
+//!                                          server for a terminal (--serial-listen; raw TCP
+//!                                          with --serial-raw; 0 cycles = until it
+//!                                          disconnects; real time after start-up) or get
+//!                                          scripted input (`serial_schedule`). --live redraws
+//!                                          the screen as it changes.
 //!   cpt-run --timer <file.bin>             Attach the 100 Hz task-switch timer interrupt (RST 4).
 //!   cpt-run --speaker-wav out.wav <file.bin>
 //!                                          Attach the speaker; when the run ends, write what it
@@ -114,10 +122,22 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mut screen_at: Vec<u64> = Vec::new();
     let mut profile = false;
     let mut brk_after: u64 = 0;
+    // The serial port (8251 at 4AH/4BH): a terminal over TCP, and/or scripted input.
+    let mut serial_listen: Option<String> = None;
+    let mut serial_raw = false;
+    let mut serial_in: Option<String> = None;
+    let mut serial_in_at: Option<u64> = None;
+    let mut live = false;
     let mut positional: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--serial-listen" => serial_listen = Some(it.next().ok_or("--serial-listen needs an address, e.g. 127.0.0.1:2323")?.clone()),
+            "--serial-raw" => serial_raw = true,
+            "--serial-in" => serial_in = Some(it.next().ok_or("--serial-in needs a script")?.clone()),
+            "--serial-in-at" => serial_in_at = Some(it.next().ok_or("--serial-in-at needs a cycle count")?
+                .parse().map_err(|_| "invalid --serial-in-at")?),
+            "--live" => live = true,
             "--keys" => keys_script = Some(it.next().ok_or("--keys needs a script")?.clone()),
             "--keys-at" => keys_at = it.next().ok_or("--keys-at needs a cycle count")?
                 .parse().map_err(|_| "invalid --keys-at")?,
@@ -135,11 +155,19 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         Some(s) => key_schedule(s, keys_at)?,
         None => Vec::new(),
     };
+    let serial_bytes = match &serial_in {
+        Some(s) => serial_schedule(s, serial_in_at.unwrap_or(keys_at))?,
+        None => Vec::new(),
+    };
     let path = args.first().ok_or("--cpt-boot needs a disk image")?;
-    let budget: u64 = match args.get(1) {
+    let mut budget: u64 = match args.get(1) {
         Some(s) => s.parse().map_err(|_| "invalid cycle count")?,
         None => 20_000_000,
     };
+    // With a terminal, 0 cycles means "until the terminal disconnects".
+    if budget == 0 && serial_listen.is_some() {
+        budget = u64::MAX;
+    }
     // Optional breakpoint: stop the first time PC reaches it and show how we got there.
     let brk: Option<u16> = match args.get(2) {
         Some(s) if s != "-" => Some(parse_u16(s)?),
@@ -154,9 +182,29 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     // 32K * (1 + blocks)), for offline disassembly.
     let mem_out: Option<String> = args.get(4).cloned();
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
-    let sys = CptSystem::boot(&bytes, op_delay).map_err(|e| format!("{}: {}", path, e))?;
-    let (fdc_dev, pit_dev, ack_dev, kb_dev) = (sys.fdc, sys.pit, sys.ack, sys.kb);
+    let mut sys = CptSystem::boot(&bytes, op_delay).map_err(|e| format!("{}: {}", path, e))?;
+    let (fdc_dev, pit_dev, ack_dev, kb_dev, usart_dev) = (sys.fdc, sys.pit, sys.ack, sys.kb, sys.usart);
+    // Something is on the line (DSR on) when there's a terminal or a serial input script.
+    let serial_on = serial_listen.is_some() || !serial_bytes.is_empty();
+    sys.usart().set_dsr(serial_on);
+    // Opening the terminal waits for it to connect, before the system starts.
+    let mut terminal = match &serial_listen {
+        Some(addr) => Some(tcp_serial::TcpTransport::listen_with(addr, !serial_raw)
+            .map_err(|e| format!("serial listen on {} failed: {}", addr, e))?),
+        None => None,
+    };
     let mut exec = sys.exec;
+    fn usart_of(m: &mut Machine, dev: usize) -> &mut cpt_machine::Usart8251 {
+        m.device_mut(dev).unwrap().as_any_mut().downcast_mut().unwrap()
+    }
+
+    let mut next_serial = 0usize;
+    let mut next_pump: u64 = 0;
+    let mut serial_out: Vec<u8> = Vec::new();
+    // Real time with a terminal, once the system has settled (start-up runs as fast as it can).
+    let mut pace_from: Option<(std::time::Instant, u64)> = None;
+    let mut next_draw = std::time::Instant::now();
+    let mut last_screen = String::new();
 
     // Watch the code move between 256-byte pages: a compact trail of where execution went.
     let mut trail: Vec<(u64, u16)> = Vec::new();
@@ -216,6 +264,48 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
                 .downcast_mut::<cpt_machine::CptKeyboard>().unwrap();
             kb.push_event(schedule[next_key].1);
             next_key += 1;
+        }
+        // The serial line, every 10 ms of emulated time (about one character at 1200 baud).
+        if serial_on && now >= next_pump {
+            next_pump = now + 20_000;
+            let u = usart_of(&mut exec.machine, usart_dev);
+            let mut due = Vec::new();
+            while next_serial < serial_bytes.len() && serial_bytes[next_serial].0 <= now {
+                due.push(serial_bytes[next_serial].1);
+                next_serial += 1;
+            }
+            u.push_rx(&due);
+            let out = u.take_tx();
+            if serial_out.len() < 4096 {
+                serial_out.extend(out.iter().take(4096 - serial_out.len()));
+            }
+            if let Some(t) = terminal.as_mut() {
+                t.send(&out);
+                let incoming = t.recv();
+                u.push_rx(&incoming);
+                if t.is_closed() {
+                    eprintln!("serial: the terminal disconnected");
+                    break;
+                }
+                if now >= cpt_machine::cpt_system::SETTLED_CYCLES {
+                    let (wall0, cyc0) = *pace_from.get_or_insert((std::time::Instant::now(), now));
+                    let emulated = std::time::Duration::from_micros((now - cyc0) / 2);
+                    let wall = wall0.elapsed();
+                    if emulated > wall + std::time::Duration::from_millis(2) {
+                        std::thread::sleep(emulated - wall);
+                    }
+                }
+            }
+            if live && std::time::Instant::now() >= next_draw {
+                next_draw = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                let s = cpt_machine::cpt_display::render(|a| exec.machine.read(a), 0x7FF8,
+                    cpt_machine::cpt_display::SCREEN_ROWS).to_text();
+                if s != last_screen {
+                    print!("\x1b[H\x1b[2J");
+                    print_screen(&mut exec.machine, 0x7FF8);
+                    last_screen = s;
+                }
+            }
         }
         if next_screen < screen_at.len() && screen_at[next_screen] <= now {
             println!("\n=== at cycle {} ({:.2} s) ===", now, now as f64 / 2e6);
@@ -286,6 +376,19 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         let shown: Vec<String> = kb.delivered.iter().take(40).map(|e| format!("{:02X}", e)).collect();
         println!("keyboard: {} of {} events scheduled, {} read by the CPU, {} still waiting: {}",
             next_key, schedule.len(), kb.delivered.len(), kb.pending(), shown.join(" "));
+    }
+
+    // The serial port, if the system set it up or anything came or went on the line.
+    let u = usart_of(&mut exec.machine, usart_dev);
+    serial_out.extend(u.take_tx().into_iter().take(4096usize.saturating_sub(serial_out.len())));
+    if !u.control_log.is_empty() || u.sent > 0 || u.received > 0 {
+        let writes: Vec<String> = u.control_log.iter().take(24)
+            .map(|(p, v)| format!("{:02X}:{:02X}", p, v)).collect();
+        println!("serial 8251 (4AH-4CH): mode {:02X}, command {:02X}, 4CH = {}; control writes: {}",
+            u.mode(), u.command(), u.rate_select().map_or("-".into(), |v| format!("{:02X}", v)), writes.join(" "));
+        println!("  sent {} bytes{}: \"{}\"", u.sent, if u.breaks > 0 { format!(" and {} break(s)", u.breaks) } else { String::new() },
+            serial_text(&serial_out));
+        println!("  received {} bytes ({} still waiting)", u.received, u.rx_waiting() + serial_bytes.len() - next_serial);
     }
 
     if profile {
@@ -483,6 +586,50 @@ fn key_schedule(script: &str, at: u64) -> Result<Vec<(u64, u8)>, String> {
     }
     out.sort_by_key(|e| e.0);
     Ok(out)
+}
+
+/// Turn a serial input script into timed bytes (cycle, byte) for the CPT's receive line,
+/// starting at `at`: plain characters are sent as themselves, `{XX}` sends byte XX (hex, e.g.
+/// `{0D}` for carriage return), and `{ms N}` waits N milliseconds. Bytes due at the same time
+/// arrive one after another at the line's speed.
+fn serial_schedule(script: &str, at: u64) -> Result<Vec<(u64, u8)>, String> {
+    const MS: u64 = 2_000;
+    let mut out = Vec::new();
+    let mut t = at;
+    let mut chars = script.chars();
+    while let Some(c) = chars.next() {
+        if c != '{' {
+            let mut buf = [0u8; 4];
+            for &b in c.encode_utf8(&mut buf).as_bytes() {
+                out.push((t, b));
+            }
+            continue;
+        }
+        let body: String = chars.by_ref().take_while(|&c| c != '}').collect();
+        let body = body.trim().to_ascii_lowercase();
+        if let Some(n) = body.strip_prefix("ms") {
+            t += n.trim().parse::<u64>().map_err(|_| format!("bad {{{}}}", body))? * MS;
+            continue;
+        }
+        let b = u8::from_str_radix(&body, 16).map_err(|_| format!("bad serial byte {{{}}} (want hex 00-FF)", body))?;
+        out.push((t, b));
+    }
+    Ok(out)
+}
+
+/// Show bytes from the serial line as text: printable ASCII as is, CR/LF as \r \n, others as
+/// {XX}.
+fn serial_text(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for &b in bytes {
+        match b {
+            b'\r' => s.push_str("\\r"),
+            b'\n' => s.push_str("\\n"),
+            0x20..=0x7E => s.push(b as char),
+            _ => s.push_str(&format!("{{{:02X}}}", b)),
+        }
+    }
+    s
 }
 
 fn digits(n: usize) -> usize {

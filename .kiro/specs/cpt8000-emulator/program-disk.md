@@ -91,11 +91,17 @@ for sector numbers past the end of the disk. The codes match the contents almost
   next key). Empty item slots occur in leaves (leaf 902's first slot is empty).
 - **Root:** track 0 sector 13, level `'1'`: `[ ptr 898 ]` `OP.00.1` `[ ptr 897 ]`.
 - **Leaves:** sector 902 (`D` … `OP.00.0`) and sector 899 (`OP.00.1` … `WN`), level `'0'`.
-- **Pointers are logical sectors with a skew of 3 within a track:**
-  physical sector = (3 × logical sector) mod 16, i.e. logical 897 (track 56 sector 1) is
-  physical sector 3 = linear 899, and logical 898 (sector 2) is physical sector 6 = linear 902.
-  Both root→leaf pointers resolve this way, and so do `D` (→ its header at 905) and `LEGAL`
-  (→ 768). The physical recording has no interleave, so the skew is the filesystem's own.
+- **Pointers are logical sectors (track × 16 + s), skewed by 3 within a track and shifted by
+  2 per track:** physical sector = (3 × s + 2 × track) mod 16 [CONFIRMED]. Logical 897
+  (track 56 s 1) is physical sector 3 = linear 899, and logical 898 is physical sector 6 =
+  linear 902 (on track 56 the shift is 112 mod 16 = 0). The physical recording has no
+  interleave, so the skew is the filesystem's own.
+  - The first analysis used plain skew 3, which works only on tracks that are multiples of 8.
+    This disk's directory and LEGAL happen to sit on tracks 56 and 48, which hid the shift.
+    cpt2489.img's directory (leaves on tracks 34, 60 and 64) showed it.
+  - The real system's reads match the full rule for every document tried (table under "The
+    filer reads header blocks directly", and IN DIRECTIONS on cpt2489: 918 = t57 s6 → t57 s4).
+  - So **a leaf's pointer is the document's first (header) block**.
 
 The 14 documents:
 
@@ -110,10 +116,6 @@ The 14 documents:
 | OP.00.0 | 00000259 | 545 | | WN | 0001002F | 553 |
 
 **Not yet understood:**
-- **What a leaf pointer points to.** Under skew 3 only `D` and `LEGAL` land on their own
-  document's header block; `OP` and `OP.01.0` land on list blocks (below); others land in other
-  documents' text or in code. No other skew does better (the best, 7, matches 4 of 14). The
-  pointer is probably the root of each document's own index, whose format is still unknown.
 - **The 4-byte field.** Six of the documents have nearly consecutive values `000117D3` …
   `000117DA`, which suggests a creation sequence number or date stamp rather than a size.
 
@@ -387,6 +389,11 @@ Functions identified so far:
 | 3A.0B | E6BAH (block 0) | swap the optional status row's jump between C2 and C3 |
 | 3D.0A | D74CH (block 2) | the keyboard task: take the next key from the ring at 058BH |
 
+The second program disk, cpt2489 (with TTY), has its own map, in hex and decimal, in
+[segments-cpt2489.md](segments-cpt2489.md). It adds segment 43 (2BH), serial communications
+through an 8251 USART at 4AH/4BH (receive on RST 1, transmit on RST 4). The emulator models the
+8251, and `cpt-run --serial-listen` connects it to a terminal.
+
 The system's own entry points are a jump table at 0040H–006CH. For example: 0040H start-up
 (0D98H), 0046H the far-call dispatcher, 0052H yield (1143H), 0058H wait (11B4H), 005BH
 allocate a display page, 005EH delay (1603H), 0061H show a message (151AH), 0064H the fatal
@@ -513,8 +520,8 @@ function code a key produces is listed above. What the remaining keys do:
     when the level closes.
   - The far-call stubs it uses: F26EH = 23.0D, F274H = 23.11, F27AH = 23.15, F280H = 23.12,
     F286H = 00.00, F28CH = 12.07, F292H = 12.08, F298H = 0C.00, F29EH = 23.03,
-    F2A4H = 23.1E, F2AAH = 29.01 (show a message). Segment 23's function table really starts
-    at B23FH (one byte after the pointer `cptsegs.py` prints).
+    F2A4H = 23.1E, F2AAH = 29.01 (show a message). (Segment 23's table pointer, B23EH, is
+    its count byte; the addresses start at B23FH.)
   - **A bad name is what made the line vanish** in the earlier tests. With "Mr. Carl Wales"
     on the typing line the name is `Mr.`, ECE3H rejects it, shows message 6.53
     `THE #PAGE LABEL CONTAINS AN IMPROPER CHARACTER.` (`#` is filled in from 2639H), plays
@@ -679,12 +686,10 @@ it at start-up. The sectors it read:
 | RC-L1 | 675 (t42, logical 3) | t42 s13, s0 | 15 |
 
 Every read is a document's `01 name 02` header block and the blocks after it, in skew-3 order.
-That confirms the skew of 3 for document data. The leaf's 3-byte pointer is **not** the header
-block, though (only LEGAL's matches), and no 3-byte copy of the header's sector number exists
-anywhere on the disk. OP's pointer leads to a list block, and T's and RC-L1's into the middle
-of their text. Most likely the pointer is the document's list (or last) block, and the filer
-finds the start from data it cached at start-up [VERIFY by tracing the filer, segment 0CH
-function 29H].
+The first read is exactly the leaf's pointer under the full rule, physical = (3 × s + 2 ×
+track) mod 16: T 720 (t45 s0) → s10, MID 552 → t34 s12, OP 892 → t55 s2, LEX 673 → t42 s7,
+RC-L1 675 → t42 s13 [CONFIRMED]. (This table was first read with plain skew 3, which made the
+pointers look like they missed the header block.)
 
 **Start-up needed two floppy fixes.** The main system reads interrupt-driven: INTRQ raises
 **RST 3** (handler 06BAH), and it waits for that in a yield loop at 087CH. It also finds its

@@ -15,6 +15,17 @@ fn image() -> Option<String> {
     }
 }
 
+/// The second program disk, with TTY communications (`cpt2489.td0`).
+fn tty_image() -> Option<String> {
+    let path = format!("{}/../../disk/cpt2489.img", env!("CARGO_MANIFEST_DIR"));
+    if std::path::Path::new(&path).exists() {
+        Some(path)
+    } else {
+        eprintln!("skipping: run  python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img");
+        None
+    }
+}
+
 fn boot(image: &str, cycles: &str, brk: &str, delay: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_cpt-run"))
         .args(["--cpt-boot", image, cycles, brk, delay])
@@ -258,6 +269,28 @@ fn staple_brings_in_the_document_named_on_the_typing_line() {
     assert!(!out.contains("P. O. Box 7004"), "the name line is replaced:\n{}", out);
     let reads = out.lines().find(|l| l.contains("after the keys started")).expect("read list");
     assert!(reads.contains("t34s15(559)"), "{}", reads);
+}
+
+/// TTY communications on the TTY disk: CODE + I, then the control page `CTTY`, enables them.
+/// The system sets up the 8251 at 4AH (reset 00 00 00 40, mode 4EH, command 37H), sends
+/// `{04}N` and turns its transmitter off (16H). Characters from the line interrupt on RST 1
+/// (acknowledged with 02H) and land in the receive buffer at 3200H.
+#[test]
+fn tty_communications_set_up_the_8251_and_receive() {
+    let Some(img) = tty_image() else { return };
+    let out = boot_with(&img, "130000000", &["--keys", "{+77}i{-77}{ms 1500}ctty{14}{ms 8000}", "--keys-at", "80000000",
+        "--serial-in", "{48}{C5}{CC}{CC}{CF}{8D}{0A}", "--serial-in-at", "105000000"]);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |TTY COMMUNICATIONS ENABLED"), "{}", out);
+    let serial = out.lines().find(|l| l.starts_with("serial 8251")).unwrap_or_else(|| panic!("no serial line:\n{}", out));
+    // Reset, 4CH, mode, command; then (in an order that depends on the line's timing) 4CH = 09
+    // and the transmitter turned off.
+    assert!(serial.contains("control writes: 4A:00 4A:00 4A:00 4A:40 4C:00 4A:4E 4A:37 "), "{}", serial);
+    assert!(serial.contains("4C:09") && serial.contains("mode 4E, command 16, 4CH = 09"), "{}", serial);
+    assert!(out.contains("  sent 2 bytes: \"{04}N\""), "{}", out);
+    assert!(out.contains("  received 7 bytes (0 still waiting)"), "{}", out);
+    let acks = out.lines().find(|l| l.starts_with("interrupt acknowledges")).unwrap();
+    assert!(acks.contains(" 02x"), "receive interrupts (RST 1) acknowledged: {}", acks);
+    assert!(!out.contains("  4AH x") && !out.contains("4CH x"), "4AH-4CH are mapped now:\n{}", out);
 }
 
 /// The speaker (8253 counter 0): start-up plays sound 1 from the table at 1581H (2000 Hz for

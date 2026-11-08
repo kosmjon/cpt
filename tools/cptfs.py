@@ -10,11 +10,11 @@ What is understood (see .kiro/specs/cpt8000-emulator/program-disk.md):
   * The document directory is a B-tree.  Node = level byte ('0' leaf / '1' inner, ASCII),
     then 23-byte items: 16-char space-padded name + 4-byte field + 3-byte pointer.  The root
     is track 0 sector 13.  In an inner node the first item has an empty name.
-  * Pointers are logical sectors.  Within a track the filesystem uses a skew of 3:
-    physical sector = (3 * logical sector) mod 16.  This is confirmed for the directory's own
-    root -> leaf pointers, and for document data (the real filer reads a document's blocks
-    in skew-3 order).  A leaf's pointer is NOT the document's header block (only LEGAL's
-    matches); what it points to is still open (a list block for OP, mid-text for T).
+  * Pointers are logical sectors (track * 16 + s).  The physical sector is skewed by 3 within
+    the track and shifted by 2 per track: physical sector = (3 * s + 2 * track) mod 16.
+    Confirmed by the real system's own reads (IN RC-L1, logical 675 = track 42 s 3, reads
+    t42s13; WN 553 reads t34s15; MID 552 reads t34s12) and by every directory pointer on
+    cpt2489.img.  A leaf's pointer is the document's first block.
 
 usage:
   cptfs.py IMAGE            volume label, allocation summary, directory listing
@@ -28,7 +28,7 @@ ALLOC = {0: "free", 1: "reserved", 2: "data", 3: "system/index"}
 
 def physical(logical):
     track, sec = divmod(logical, SPT)
-    return track * SPT + (3 * sec) % SPT
+    return track * SPT + (3 * sec + 2 * track) % SPT
 
 
 def sector(img, linear):
@@ -88,7 +88,7 @@ def main(argv):
 
     root = sector(img, 13)
     print("directory:    root at track 0 sector 13 (level %r)" % chr(root[0]))
-    # The root's items point at the leaves (logical numbers, skew 3 within the track).
+    # The root's items point at the leaves (logical numbers; see physical()).
     entries = []
     o = 1
     while o + 23 <= SS and any(root[o:o + 23]):
