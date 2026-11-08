@@ -392,7 +392,8 @@ Functions identified so far:
 The second program disk, cpt2489 (with TTY), has its own map, in hex and decimal, in
 [segments-cpt2489.md](segments-cpt2489.md). It adds segment 43 (2BH), serial communications
 through an 8251 USART at 4AH/4BH (receive on RST 1, transmit on RST 4). The emulator models the
-8251, and `cpt-run --serial-listen` connects it to a terminal.
+8251, and `cpt-run --serial-listen` connects it to a terminal. TTY mode itself doesn't work
+yet; the known issues and next steps are in that document.
 
 The system's own entry points are a jump table at 0040H–006CH. For example: 0040H start-up
 (0D98H), 0046H the far-call dispatcher, 0052H yield (1143H), 0058H wait (11B4H), 005BH

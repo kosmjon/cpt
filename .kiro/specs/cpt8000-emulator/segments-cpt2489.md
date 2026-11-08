@@ -146,14 +146,7 @@ EVEN PARITY
     which fits every handler writing its own bit there [HYPOTHESIS for the controller chip].
 - **Received characters reach the receive buffer at 3200H**, still with their parity bits
   (`48 C5 CC CC CF` for `HELLO`).
-- **Not yet understood:**
-  - The text doesn't appear in the document, even after an EOT (`84H`).
-  - The typing line shows `@O>>^` in reverse video right after the set-up, with two codes
-    the display decoder has no rule for (FEH, B7H).
-  - Typed text appears on the typing line but isn't sent: TxEN stays off.
-
-  The TTY protocol (what starts a transmission, how received text is filed) still needs
-  tracing in segment 43 [VERIFY].
+- What doesn't work yet is listed under "Communications: known issues and next steps" below.
 
 ### The emulator's 8251
 
@@ -186,6 +179,104 @@ cpt-run --cpt-boot disk\cpt2489.img 0 - 40000 --serial-listen 127.0.0.1:2323 --l
   the CPT to see clean characters. Telnet clients send 8-bit data, so bit 7 is clear
   [VERIFY whether the CPT rejects bad parity or only strips it].
 - The browser build has the device too, but nothing attached to it.
+
+### Communications: known issues and next steps
+
+Status: the chip level works. The CPT sets up the 8251, both interrupts run, its first two
+bytes reach a TCP client, and the client's bytes reach the CPT's receive buffer
+[CONFIRMED by running it, 2026-11-03]. TTY mode isn't usable yet, because the CPT's own
+protocol in segment 43 isn't understood.
+
+**Known issues: the CPT side (the protocol)**
+
+1. **Received text isn't filed.** The bytes land in the receive buffer at 3200H, parity bits
+   included. Nothing then moves them into the document, not even after CR LF or EOT (`84H`).
+   Who reads that buffer, and what makes it do so, is unknown.
+2. **Typed text isn't sent.** Text typed after TTY is enabled appears on the typing line,
+   and each queued byte comes with an `OUT 00H,10H`. But the transmitter stays off (command
+   `16H` since the start-up `{04}N`), so nothing goes out.
+   - Writes at E92DH, E93EH, E944H (4CH), E9E6H and E9FEH would change the command, but they
+     never ran in our tests.
+   - The CPT is probably waiting for something before it turns the transmitter back on: a
+     key (a "send" command), a reply from the host, or a modem signal.
+3. **The start-up `{04}N` is unexplained.** It's EOT followed by `N` (4EH, which happens to
+   have even parity already). It may be part of a host handshake, such as "not ready" or a
+   station ID [HYPOTHESIS].
+4. **The typing line shows `@O>>^`** in reverse video right after set-up. The screen has two
+   codes the display decoder has no rule for, FEH and B7H. It may be a TTY status line drawn
+   with codes we decode wrongly.
+5. **CODE + K** (the editor's other route into segment 43) showed nothing visible.
+6. **Parity handling is unknown.** The receive path can strip bit 7 (`ANI 7FH`). Whether it
+   also checks parity, and rejects or marks bad characters, hasn't been traced. Telnet
+   clients send 8-bit data with no parity bit.
+7. **4CH's meaning is a guess.** `00` is written at reset, then `09` with `RATE: 1200`,
+   probably a baud-rate select. The model records it but always runs at 1200 baud.
+8. **Port 00H as end-of-interrupt is a hypothesis.** It fits every handler writing its own
+   bit there, and the TX code re-arming with 10H. The emulator's `InterruptAck` only logs the
+   writes. It doesn't block a level until its end-of-interrupt, and device priority is just
+   the order devices are attached (the 8251 is last). If the CPT relies on the controller
+   holding a level off, transmit could behave differently from the real machine.
+9. **The other control-page fields** (`LINES PER PAGE: 70`, the code-set numbers) haven't
+   been tried with other values. Nor have the other likely control documents: `CONTROL`,
+   `C-ASCII.T1`, `C-ASCII.T2`, and `WN` (`WORDNET. RATE: 9600`).
+
+**Known issues: the emulator side**
+
+1. **No interactive CPT keyboard in a terminal session.** `cpt-run` only types its `--keys`
+   script. During a `--serial-listen` session you can't type on the CPT keyboard, only on the
+   terminal.
+2. **The Telnet server suppresses local echo.** It sends `WILL ECHO`, so the client doesn't
+   echo locally, and the CPT doesn't echo back either. Typing on the terminal is therefore
+   blind. `--serial-raw` avoids the negotiation, but most clients then need local echo turned
+   on by hand.
+3. **No parity or CR/LF translation for the terminal.** The terminal's bytes arrive as sent,
+   with no even-parity bit and Enter as CR (or CR LF). The CPT expects 7 data bits with even
+   parity.
+4. **`--serial-listen` blocks before boot** until a client connects, and the run ends when
+   the client disconnects.
+5. **Receiver pacing hides overruns.** A character starts only after the CPU has read the
+   last one, so the CPT's XOFF path (sent when its buffer fills) is never exercised the way a
+   fast host would exercise it.
+6. **Modem signals are simplified.** DSR is on whenever a terminal or script is attached,
+   and CTS is always on. DTR and RTS from the command register aren't passed to the host.
+7. **`--live`** redraws at most twice a second, only while the serial port is active, as a
+   full redraw.
+8. **The browser has no serial connection.** A page can't open a TCP socket. The device
+   runs in the wasm build with nothing attached.
+
+**Suggested next steps** (in order)
+
+1. **Find who consumes the receive buffer.** Add a memory watchpoint to `cpt-run`
+   (`--watch <addr>`: report the PC of each read or write of an address, e.g. 3200H, the
+   pointer at ctl+2CH = 2D2CH, and 2042H's buffer). Then trace from the reader to how
+   received text is filed. This answers issue 1.
+2. **Find what turns the transmitter back on.** Break at E92DH, E93EH, E9E6H and E9FEH to
+   see which key or event reaches them. Try CODE + I and CODE + K followed by the function
+   keys (PRINT, OUT, RETURN, the staple key) in TTY mode. This answers issue 2.
+3. **Map segment 43's six functions** from the editor's calls (2B.00, 01, 03, 04, 05, 07 at
+   D61DH–D6ADH) to keys, the way the editor's dispatch table was mapped.
+4. **Answer the `{04}N` handshake.** Try likely host replies with `--serial-in`, with even
+   parity: ACK (`06`), ENQ (`05`), XON (`11`), EOT (`84`), `Y`, `N`. Watch whether the CPT
+   turns the transmitter on or files text. This answers issue 3.
+5. **Decode the TTY status line.** Dump the display page behind the typing line after
+   set-up and add rules for FEH and B7H to `cpt_display`. This answers issue 4.
+6. **Find where `09` for 4CH comes from**, likely a table indexed by the `RATE:` value. That
+   gives the baud-rate table, and the model can then run at the rate the CPT chose. This
+   answers issue 7.
+7. **Terminal comfort in `cpt-run`:**
+   - `--serial-parity even` adds the parity bit to the terminal's bytes and strips it from
+     the CPT's.
+   - `--serial-echo` stops the Telnet server from claiming echo.
+   - CR / CR LF options.
+   - Forwarding console keystrokes to the CPT keyboard, so a session needs no key script.
+   
+   These answer emulator issues 1–3.
+8. **Model the interrupt controller's in-service state**, but only if tracing shows the CPT
+   depends on it. This answers issue 8.
+9. **A browser serial connection** (later): a small WebSocket-to-TCP bridge in `run-web.bat`,
+   or a terminal pane in the page attached to the wasm `Usart8251`.
+10. **Once filing works:** a boot test that receives a short text and finds it in the
+    document, and one that types text on the CPT and checks it on the line.
 
 The editor's far calls to 2B: 2B.07 (D61DH), 2B.04 (D647H), 2B.00 (D665H), 2B.01 (D67DH),
 2B.05 (D6A7H) and 2B.03 (D6ADH), all from segment 23 in block 2.
