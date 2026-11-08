@@ -29,7 +29,27 @@ pub trait Device {
         None
     }
 
+    /// A pending direct-memory-access transfer, if the device has one (e.g. a DMA controller
+    /// moving a disk sector). The machine services it right after the device's `io_out` and on
+    /// every tick, so the data is in memory before the CPU can observe completion. Default: none.
+    fn take_dma(&mut self) -> Option<DmaRequest> {
+        None
+    }
+
+    /// Delivers the bytes for a [`DmaRequest::ReadMemory`] the device asked for. Default: no-op.
+    fn dma_read_done(&mut self, _data: &[u8]) {}
+
     /// Downcast support so hosts can reach a concrete device (e.g. the UI reading the display
     /// device's page buffer). Implementors return `self`.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// A DMA transfer between a device and memory, carried out by the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DmaRequest {
+    /// Write `data` to memory starting at `addr` (device to memory, e.g. a disk read).
+    WriteMemory { addr: u16, data: Vec<u8> },
+    /// Read `len` bytes of memory starting at `addr` and hand them to the device with
+    /// [`Device::dma_read_done`] (memory to device, e.g. a disk write).
+    ReadMemory { addr: u16, len: usize },
 }

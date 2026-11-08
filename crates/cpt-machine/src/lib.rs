@@ -6,6 +6,10 @@
 //! and delivering interrupts.
 
 pub mod config;
+pub mod cpt_display;
+pub mod cpt_floppy;
+pub mod cpt_interrupts;
+pub mod cpt_keyboard;
 pub mod demo;
 pub mod device;
 pub mod disk;
@@ -19,8 +23,12 @@ pub mod speaker;
 pub mod timer;
 
 pub use config::{BankSelectEncoding, MachineConfig};
-pub use device::Device;
+pub use device::{Device, DmaRequest};
 pub use disk::{DiskImage, Drive, Geometry, Station};
+pub use cpt_display::CptScreen;
+pub use cpt_floppy::CptFloppy;
+pub use cpt_interrupts::{InterruptAck, Pit8253};
+pub use cpt_keyboard::CptKeyboard;
 pub use disk_controller::DiskController;
 pub use display::{DisplayDevice, Layout, PageSnapshot, COLS, ROWS};
 pub use keyboard::KeyboardDevice;
@@ -44,6 +52,8 @@ pub struct Machine {
     display_window: Option<(u16, u16, usize)>,
     /// Record of writes to unmapped I/O ports, for debugging while the port map is unknown.
     pub unmapped_io: Vec<(u8, u8)>,
+    /// Unmapped I/O ports that were read (each listed once), for the same reason.
+    pub unmapped_in: Vec<u8>,
 }
 
 impl Machine {
@@ -55,6 +65,7 @@ impl Machine {
             devices: Vec::new(),
             display_window: None,
             unmapped_io: Vec::new(),
+            unmapped_in: Vec::new(),
         }
     }
 
@@ -122,6 +133,28 @@ impl Machine {
         for d in &mut self.devices {
             d.tick(cycles);
         }
+        for i in 0..self.devices.len() {
+            self.service_dma(i);
+        }
+    }
+
+    /// Carry out any DMA transfers device `i` has pending, through the normal memory path
+    /// (so banked memory and the display window behave as for CPU accesses).
+    fn service_dma(&mut self, i: usize) {
+        while let Some(req) = self.devices[i].take_dma() {
+            match req {
+                DmaRequest::WriteMemory { addr, data } => {
+                    for (k, b) in data.iter().enumerate() {
+                        self.write(addr.wrapping_add(k as u16), *b);
+                    }
+                }
+                DmaRequest::ReadMemory { addr, len } => {
+                    let data: Vec<u8> =
+                        (0..len).map(|k| self.read(addr.wrapping_add(k as u16))).collect();
+                    self.devices[i].dma_read_done(&data);
+                }
+            }
+        }
     }
 
     /// Poll devices for a pending interrupt, returning the first RST vector requested.
@@ -181,6 +214,10 @@ impl Bus for Machine {
         if let Some(i) = self.device_index_for_port(port) {
             return self.devices[i].io_in(port);
         }
+        // Unmapped port: record it (once) for port-map discovery; reads float to 0.
+        if !self.unmapped_in.contains(&port) {
+            self.unmapped_in.push(port);
+        }
         0
     }
 
@@ -192,6 +229,7 @@ impl Bus for Machine {
         }
         if let Some(i) = self.device_index_for_port(port) {
             self.devices[i].io_out(port, val);
+            self.service_dma(i);
             return;
         }
         // Unmapped port: record it so we can discover the real port map later, but don't crash.

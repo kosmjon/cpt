@@ -27,3 +27,6 @@ speaker/*.wav
 # PL/M-80 toolchain download and build output for monitor/monitor.plm
 monitor/plm80tools/
 monitor/plm-build/
+
+# Disk images decoded from TeleDisk (rebuilt by tools/td0.py)
+disk/

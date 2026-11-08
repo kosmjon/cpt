@@ -87,6 +87,15 @@ pub struct MachineConfig {
     pub serial_vector: u8,
 }
 
+impl MachineConfig {
+    /// The real CPT hardware as far as it is known from a real program disk's boot code
+    /// (`program-disk.md`): bank select is port 03H. The floppy hardware is `CptFloppy`. Other
+    /// fields keep the placeholder defaults until the real values are found.
+    pub fn cpt_real() -> Self {
+        MachineConfig { bank_select_port: 0x03, ..MachineConfig::default() }
+    }
+}
+
 impl Default for MachineConfig {
     /// A reasonable default for a 256K machine (8 switchable blocks). The bank-select port
     /// address and encoding are placeholders pending the system source.
