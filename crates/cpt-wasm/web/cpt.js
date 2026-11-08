@@ -368,17 +368,53 @@ function setupSpecialKeys(ws, keys) {
           }
         });
       } else {
-        el.addEventListener("click", () => {
+        // A panel key is down for as long as the pointer holds it, like a real key, so the
+        // CPT's own auto-repeat works: its keyboard task repeats a held key that's on its
+        // repeat list (UP, DOWN, ...) after a short delay, then every 3 ticks of its 100 Hz
+        // clock. A press is at least a typist's 40 ms tap. A click with no pointer press
+        // (Enter or Space on the focused button, or a script) is a tap.
+        const TAP_MS = 40;
+        let downAt = 0; // when the pointer pressed the key; 0 while it's up
+        let skipClick = false; // the click that follows a pointer press
+        const pressKey = () => {
           el.classList.add("pressed");
-          setTimeout(() => el.classList.remove("pressed"), 90);
           if (spec.lock) el.classList.toggle("locked");
+          if (k !== undefined) keys.press(k);
+        };
+        const releaseKey = () => {
+          el.classList.remove("pressed");
           if (k === undefined) return;
-          keys.press(k);
-          // Hold the key for a typist's 40 ms, so the system sees an ordinary tap.
-          setTimeout(() => {
-            keys.release(k);
-            keys.releaseLatched();
-          }, 40);
+          keys.release(k);
+          keys.releaseLatched();
+        };
+        const up = () => {
+          if (!downAt) return;
+          const held = performance.now() - downAt;
+          downAt = 0;
+          if (held >= TAP_MS) releaseKey();
+          else setTimeout(releaseKey, TAP_MS - held);
+        };
+        el.addEventListener("pointerdown", (e) => {
+          if ((e.button !== undefined && e.button !== 0) || downAt) return;
+          downAt = performance.now();
+          skipClick = true;
+          // Keep the pointer on this key until it's released, even if it slides off.
+          if (el.setPointerCapture && e.pointerId !== undefined) el.setPointerCapture(e.pointerId);
+          pressKey();
+        });
+        el.addEventListener("pointerup", up);
+        el.addEventListener("pointercancel", up);
+        el.addEventListener("lostpointercapture", up);
+        window.addEventListener("blur", up);
+        // A long touch would open the context menu instead of holding the key.
+        el.addEventListener("contextmenu", (e) => e.preventDefault());
+        el.addEventListener("click", () => {
+          if (skipClick) {
+            skipClick = false;
+            return;
+          }
+          pressKey();
+          setTimeout(releaseKey, TAP_MS);
         });
       }
       grid.appendChild(el);

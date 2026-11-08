@@ -300,6 +300,41 @@ for (let i = 0; i < 10 && !(lineNo() < afterUp); i++) {
 assert.ok(lineNo() < afterUp, `↓ (CPT DOWN) moves back: from ${afterUp} ("${rowText(0)}")`);
 console.log(`after UP, UP, DOWN: "${rowText(0)}"`);
 
+// Holding a panel key holds the CPT key, so the CPT's own auto-repeat runs: UP held about a
+// second moves on many lines (a tap moves one).
+const beforeHold = lineNo();
+const upKey = panelKey("UP");
+await upKey.dispatch("pointerdown", { button: 0 });
+const holdStart = performance.now();
+while (performance.now() - holdStart < 1200) {
+  await sleep(50);
+  await frames(1);
+}
+await upKey.dispatch("pointerup", {});
+await upKey.dispatch("click"); // the click that follows a pointer press is not another tap
+for (let i = 0; i < 6; i++) {
+  await sleep(100);
+  await frames(1);
+}
+const afterHold = lineNo();
+assert.ok(afterHold - beforeHold >= 5, `UP held: repeats (line ${beforeHold} -> ${afterHold}, "${rowText(0)}")`);
+// DOWN held repeats too, back to where the hold started (the steps below expect it).
+const downKey = panelKey("DOWN");
+await downKey.dispatch("pointerdown", { button: 0 });
+const downStart = performance.now();
+while (lineNo() > beforeHold && performance.now() - downStart < 4000) {
+  await sleep(20);
+  await frames(1);
+}
+await downKey.dispatch("pointerup", {});
+await downKey.dispatch("click");
+for (let i = 0; i < 6; i++) {
+  await sleep(100);
+  await frames(1);
+}
+assert.ok(lineNo() <= beforeHold, `DOWN held: back to line ${beforeHold} or before ("${rowText(0)}")`);
+console.log(`UP held 1.2 s: line ${beforeHold} -> ${afterHold}; DOWN held: back to ${lineNo()}`);
+
 // The user's case: CODE + IN, Enter builds the table of contents in the upper screen (the
 // cursor at its end); then PAGE, DOWN scrolls the upper screen completely into the lower one.
 const codeKey = panelKey("CODE");

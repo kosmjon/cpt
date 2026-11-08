@@ -161,6 +161,8 @@
         padding: 2px;
         cursor: pointer;
         user-select: none;
+        /* A held key on a touch screen stays held instead of scrolling the page. */
+        touch-action: none;
         transition: transform 0.04s, box-shadow 0.04s;
       }
       /* Pressed: the cap sinks and its shadow collapses (tactile click). */

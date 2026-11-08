@@ -712,6 +712,60 @@ The special keys' numbers follow the keypad's columns: the keys in one column sh
 digit. IN, OUT and PRINT are 3DH, 2DH and 7DH. STOP, SKIP, ADJ, UP and DOWN are 3FH, 2FH, 7FH,
 0FH and 1FH. By that pattern WORDPAK would be 0DH [HYPOTHESIS; not mapped].
 
+### Auto-repeat **[CONFIRMED by disassembly and by running it]**
+
+The keyboard sends only a press and a release for each key; the software does the repeating.
+The keyboard task (segment 3D function 0A, D74CH, block 2 on cpt.img) repeats a held key
+while no other key event arrives, **if the key's code is on a repeat list**.
+
+- **Timing.** When a new key arrives (D80AH), the delay before the first repeat is set to
+  **1EH = 30 ticks**. After each repeat (D7E0H) it's **3 ticks**. The task yields (0052H)
+  until the tick counter at 04A6H has moved on by the delay since the key was last taken
+  (2591H).
+- **The tick** is counted in the RST 7 handler (116FH), the task-switch timer, which is
+  100 Hz in the emulator [HYPOTHESIS for the real rate]. That gives **300 ms, then a repeat
+  every 30 ms** (about 33 a second).
+  - Measured in the emulator: SPACE repeats every 30 ms, and UP about every 37 ms (scrolling
+    takes longer than a tick).
+  - The first repeat came after about 200–250 ms, sooner than 300 ms [VERIFY: where the
+    delay is counted from].
+- **The list** is entry 2 of a table at DEF5H (lookup DDC9H with L = 02): a count, then the
+  codes. The held key's code is the key-table value, shifted if SHIFT is held (D919H).
+  cpt.img's list, at DFE2H, has 17 codes:
+
+| Code | Key (number) | Notes |
+|---|---|---|
+| 20H | SPACE (10H) | |
+| 2EH | `.` (20H) | |
+| 2DH | `-` (16H) | |
+| 8FH | SHIFT + `-` (16H) | probably the underscore / underline character [HYPOTHESIS] |
+| 2AH | `*` (SHIFT + 37H) | |
+| 78H, 58H | `x` and `X` (61H) | the only letters: for x-ing out text [HYPOTHESIS] |
+| A5H | **UP** (0FH) | |
+| A6H | **DOWN** (1FH) | |
+| B0H | **SKIP** (2FH) | |
+| B1H | **ADJ** (7FH) | |
+| B4H | **ERASE** (4FH) [HYPOTHESIS for the name] | the one function key whose handler blanks a character and moves on, so repeating fits |
+| B5H | **backspace** (06H) | |
+| B6H | **RETURN** (14H) | |
+| A8H | **PROG** (02H) | a held PROG plays the keyboard program again and again |
+| 00H | (none) | 00 = no key in the key table, so it never matches |
+| FBH | (none on this keyboard) | only from SHIFT + 7AH / 5EH, which aren't keys (their entries spill over from the table's end). The alternate key table (below) has it on SHIFT + IN (3DH) |
+
+  Keys **not** on the list don't repeat. Among them: the other letters and digits, CHAR,
+  WORD, LINE, PARA, PAGE, IN, OUT, PRINT, STOP, HOLD, MAR SET, MAR REL, CLEAR TAB SET, CODE
+  and the staple key. A held letter types once [CONFIRMED by running it].
+
+- **An alternate set.** DDC9H uses a second table at E049H instead of DEF5H when the flag at
+  E203H (toggled by E1D9H) or 04C6H is set. It has its own key table (E053H) and repeat list
+  (E15EH, 16 codes: the same without the 00). It's probably another keyboard layout
+  [HYPOTHESIS].
+- **The browser panel** holds a drawn key down for as long as the pointer is pressed, so
+  this repeat works there too (`cpt.js`). A quick click is still a 40 ms tap.
+
+**Not yet confirmed:** the real tick rate, and the 200–250 ms first repeat measured in the
+emulator against the 300 ms the code suggests.
+
 **The system checks disk timing too [CONFIRMED by running it].** It isn't only the loader.
 With every read after the first 32 shortened, the start-up marquee changes from the copyright
 notice ("CPT® WORD PROCESSING SOFTWARE. COPYRIGHT© 1983 BY CPT CORPORATION. ALL RIGHTS
