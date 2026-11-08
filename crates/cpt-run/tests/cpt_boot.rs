@@ -246,6 +246,20 @@ fn skip_discards_the_lower_screen_by_unit() {
     assert!(last_row(&out, "  48 |").starts_with("  48 |August 19, 1987"), "LINE, SKIP: the format line is gone:\n{}", out);
 }
 
+/// The staple key (05H, under WORDPAK) takes the typing line as a document name and brings
+/// that document in: "wn" typed over the start of "P. O. Box 7004" becomes WN's text, read
+/// from WN's sector (t34s15).
+#[test]
+fn staple_brings_in_the_document_named_on_the_typing_line() {
+    let Some(img) = image() else { return };
+    let keys = format!("{{3D}}rc-l1{{14}}{{ms 8000}}{}wn{{ms 500}}{{05}}{{ms 10000}}", "{0F}{ms 300}".repeat(8));
+    let out = boot_with(&img, "190000000", &["--keys", &keys, "--keys-at", "80000000"]);
+    assert!(last_row(&out, "  46 |").starts_with("  46 |WORDNET.  RATE: 9600"), "{}", out);
+    assert!(!out.contains("P. O. Box 7004"), "the name line is replaced:\n{}", out);
+    let reads = out.lines().find(|l| l.contains("after the keys started")).expect("read list");
+    assert!(reads.contains("t34s15(559)"), "{}", reads);
+}
+
 /// The speaker (8253 counter 0): start-up plays sound 1 from the table at 1581H (2000 Hz for
 /// 100 ms, then 1000 Hz for 250 ms), and IN clicks (sound 0: 1333 Hz for 50 ms).
 #[test]
@@ -272,4 +286,19 @@ fn prog_records_and_replays_keys() {
     assert!(last_row(&out, "  45 |").starts_with("  45 |ab "), "the recorded line: {}", out);
     assert!(last_row(&out, "  46 |").starts_with("  46 |ab "), "PROG played it back: {}", out);
     assert!(!last_row(&out, "   1 |").contains("PROG"), "recording ended: {}", last_row(&out, "   1 |"));
+}
+
+/// CLEAR TAB SET (key 75H) toggles a tab stop at the cursor's column: one press sets it (glyph
+/// 84H on the ruler), a second press at the same column clears it, a third sets it again. The
+/// cursor moves on (typing "xy") so its own marker doesn't cover the tab marker.
+#[test]
+fn clear_tab_set_toggles_a_tab_stop() {
+    let Some(img) = image() else { return };
+    let ruler = |keys: &str| -> String {
+        let out = boot_with(&img, "95000000", &["--keys", keys, "--keys-at", "80000000"]);
+        last_row(&out, "  47 |")[6..16].to_string()
+    };
+    assert_eq!(ruler("Hello{75}{ms 300}xy"), "M...:>.^.|", "one press sets a tab at column 6");
+    assert_eq!(ruler("Hello{75}{ms 300}{75}{ms 300}xy"), "M...:..^.|", "a second press clears it");
+    assert_eq!(ruler("Hello{75}{ms 300}{75}{ms 300}{75}{ms 300}xy"), "M...:>.^.|", "a third sets it again");
 }

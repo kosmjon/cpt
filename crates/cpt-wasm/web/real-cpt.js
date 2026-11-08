@@ -35,6 +35,13 @@ const CPT_KEY = {
   // Keyboard program: CODE + PROG starts recording keys ("PROG" on the title line), CODE +
   // PROG again ends it, and PROG alone plays the recording back.
   PROG: 0x02,
+  // ERASE [HYPOTHESIS]: the one function key with an unexplained handler (code B4H, CA17H).
+  // With the cursor on text it blanks the character under it and moves on.
+  ERASE: 0x4f,
+  // The staple key (under WORDPAK): takes the typing line as a document name and brings that
+  // document in at the typing line, as a nested level (up to 5); CODE + it closes the level.
+  // Like IN, OUT and PRINT, its handler returns a command (4) to the command level.
+  STAPLE: 0x05,
   CHAR: 0x3e,
   WORD: 0x2e,
   LINE: 0x7e,
@@ -45,6 +52,10 @@ const CPT_KEY = {
   PRINT: 0x7d,
   HOLD: 0x73,
   MAR_SET: 0x71,
+  // MAR REL (margin release): its handler sets flag 04B4H next to MAR SET's (per the user and
+  // the editor's dispatch table; not yet seen on screen).
+  MAR_REL: 0x76,
+  // CLEAR TAB SET: sets a tab stop at the cursor's column, or clears the one there.
   TAB_SET: 0x75,
 };
 
@@ -54,6 +65,8 @@ const SPECIAL_LABEL_KEYS = {
   CODE: CPT_KEY.CODE,
   HOLD: CPT_KEY.HOLD,
   "MAR SET": CPT_KEY.MAR_SET,
+  "MAR REL": CPT_KEY.MAR_REL,
+  "CLEAR TAB SET": CPT_KEY.TAB_SET,
   CHAR: CPT_KEY.CHAR,
   WORD: CPT_KEY.WORD,
   LINE: CPT_KEY.LINE,
@@ -68,6 +81,8 @@ const SPECIAL_LABEL_KEYS = {
   STOP: CPT_KEY.STOP,
   ADJ: CPT_KEY.ADJ,
   PROG: CPT_KEY.PROG,
+  ERASE: CPT_KEY.ERASE,
+  STAPLE: CPT_KEY.STAPLE,
 };
 
 // PC keys that are not plain characters (KeyboardEvent.code -> CPT key number).

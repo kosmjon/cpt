@@ -345,6 +345,195 @@ The top line's prompt has two `B0` slots per character, room for per-character a
 7FFBH–7FFFH (`C0 0D C2 FB 7F`) is a blank row that loops to itself: the loader points the head
 there to show an empty screen.
 
+## Segments, banks and functions **[CONFIRMED by disassembly]**
+
+The system is split into **segments**, and code calls across banks through one dispatcher.
+`python tools/cptsegs.py <memory dump> [--calls]` decodes the map from a `cpt-run --cpt-boot`
+memory dump.
+
+- **A far call** is `CALL 0046H` followed by two inline bytes: segment, then function.
+  0046H jumps to the dispatcher at **12DEH**.
+- **The segment table** is in bank 0 at **0174H**, with the segment count (128) at 0173H.
+  Each entry is 4 bytes:
+  - a present flag;
+  - a bank byte b: the segment is in block b − 1 at 8000H–FFFFH (`OUT 03H, b−1`), or bank 0
+    only when b is 0;
+  - the address of the segment's function table (little-endian).
+- **A function table** is a count byte, then a 2-byte address per function (0000 = none).
+- **The dispatcher** checks the segment number against the count and the present flag. If
+  either fails it returns at once, doing nothing. Otherwise it saves the caller's bank,
+  selects the segment's bank, rewrites its own return to the function's address, and returns
+  into it. The function returns through **134EH**, which restores the caller's bank.
+- **1374H** (segment 01 function 04) looks up a function's address the same way: L =
+  function, H = segment.
+
+After start-up, 32 of the 128 segments are present: 7 in bank 0, and the rest in blocks 0, 1
+and 2. The code has 423 far-call sites (242 distinct functions). 25 of the segments they call
+aren't present on this program disk (03, 19, 1C, 1F–22, 24, 26, 27, 2B, 33, 38, 41–44,
+46–49, 66, 69, 78, 7A), so those calls do nothing. They're probably options this disk wasn't
+built with, such as communications or other machines' hardware [HYPOTHESIS].
+
+Functions identified so far:
+
+| Seg.func | Address | What it does |
+|---|---|---|
+| 01.00 | 0CDDH | drive table lookup |
+| 01.01 | 07DDH | start a disk request |
+| 01.02 | 087CH | wait for a disk request, with retries (the task's yield loop) |
+| 01.04 | 1374H | look up a far function's address |
+| 02.02 | 1632H | allocate a 256-byte display page (the `C2` page links) |
+| 0C.29 | 8CE2H (block 2) | the filer: find a document / probe a drive (start-up calls it for drives 0 and 1) |
+| 3A.00 | E4D0H (block 0) | build the screen's display list |
+| 3A.0B | E6BAH (block 0) | swap the optional status row's jump between C2 and C3 |
+| 3D.0A | D74CH (block 2) | the keyboard task: take the next key from the ring at 058BH |
+
+The system's own entry points are a jump table at 0040H–006CH. For example: 0040H start-up
+(0D98H), 0046H the far-call dispatcher, 0052H yield (1143H), 0058H wait (11B4H), 005BH
+allocate a display page, 005EH delay (1603H), 0061H show a message (151AH), 0064H the fatal
+trap (15C1H).
+
+## The editor's key dispatch **[CONFIRMED by tracing the running system]**
+
+How a key reaches its handler, found by stopping the emulator at each step after a key press:
+
+1. **The keyboard task's reader** (D74CH, segment 3D function 0A) translates the key number
+   through the key table and returns a class and an index. The class says whether the key is
+   a character, a function key (code A0H–DEH), or a keypad key (DFH–EFH), combined with the
+   CODE/SHIFT state.
+2. **"Get the next key"** (D9A7H, segment 3D function 00) calls it through a wrapper (DEB2H,
+   3D.0B) that maps the class through a 9-byte table at DEE5H. It also replays the keyboard
+   program (PROG) from a buffer at 0564H. It returns C = class and B = index. **The index is
+   not the function code − A0H**; this step remaps it.
+3. **The editor loop** (C765H, segment 23 function 00) branches on the class: function keys
+   go to C87EH, the keypad to C82EH, characters to the typing path.
+4. **The function dispatcher** (C901H) jumps through a table at **C916H**: 63 two-byte
+   handler addresses indexed by B (0000 = the key does nothing in the editor).
+
+The indices found, by pressing each key and stopping at the dispatcher's `PCHL` (C915H):
+
+| Index | Key | Handler | What the handler does |
+|---|---|---|---|
+| 01 | 2DH OUT | C994H | returns command 2 to the command level |
+| 02 | 3DH IN | C997H | returns command 1 |
+| 03 | 3FH | D665H | far call 28.02 |
+| 05 | 7DH PRINT | C9A0H | returns command 3 |
+| 06 | 73H HOLD | C9A3H | toggles 04AFH, shows HOLD |
+| 07 | 14H RETURN | C9AFH | new line |
+| 08 | 76H | C9C2H | **MAR REL** (per the user): sets flag 04B4H and redraws the ruler. With CODE held, 76H opens the DC84H layer instead |
+| 0A | 71H MAR SET | C9CFH | margin set |
+| 0B | 75H CLEAR TAB SET | C9D5H | toggles a tab stop |
+| 0D | 74H | C9E7H | |
+| 0E | 06H backspace | C9FAH | cursor back one column |
+| 10–14 | 3EH CHAR, 2EH WORD, 7EH LINE, 0EH PARA, 5FH PAGE | CA36H | selects the unit (0–4, in 04ECH) and shows its name |
+| 15 | CODE + 7FH | CA44H | |
+| 16 | 7FH | CA51H | |
+| 17 | 2FH SKIP | BC22H | |
+| 18 | 0FH UP | BCBAH | |
+| 19 | 1FH DOWN | BD4FH | |
+| 1A | CODE + 06H | B693H | cursor back to column 1 (a carriage return, text unchanged) |
+| 1C | **05H** | CA60H | returns **command 4** to the command level: brings in the document named on the typing line (below) |
+| 1D | CODE + 05H | CA63H | returns command 5 |
+| 21 | 69H | CA7DH | moves the cursor to column 80 |
+| 26 | CODE + 14H | CAA2H | new line |
+| 29 | CODE + 0FH | CAA6H | |
+| 32 | CODE + 3FH | CAD3H | |
+| 37 | 5CH | D68FH | far call 3B.00 (shows `.00`: decimal alignment?) |
+| 39 | **01H** | CB09H | far call **38**.00, **not present** on this disk |
+| 3A | CODE + 01H | CB15H | far call 38.00 with the unit, not present |
+
+The keypad keys 1CH and 4CH (codes E5H, E0H) also go to segment 38. Indices 27H and 33H go to
+segment **2B**, which isn't present either. So keys 01H, 1CH and 4CH do nothing on this disk
+because their feature isn't installed. Segment 38 handles keypad keys and key 5CH shows `.00`,
+so it may be a math (column arithmetic) feature [HYPOTHESIS].
+
+**The remap tables** in "get the next key" turn the reader's result into these indices.
+`python tools/cptkeys.py <memory dump>` lists them all.
+
+| Table | Used for | Notes |
+|---|---|---|
+| DBF6H | plain function keys: a byte per code A0H + n | 0 = ignore the key |
+| DC59H | CODE + a function or keypad key: (value, index) pairs | e.g. CODE + IN → 2EH (builds CONTENTS), CODE + CLEAR TAB SET → 0CH, CODE + MAR SET → 09H |
+| DC14H | CODE + a character key, upper-cased | the menus, below |
+| DC84H | a character typed after **CODE + key 76H** | a third layer: CODE held, key 76H sets a flag (2595H) and the next character uses this table |
+
+A second jump table at **CB9EH** handles indices 51H and up. Most of its entries are CCF1H,
+the error beep (message 1). SHIFT makes no difference to any function key.
+
+CODE + a letter opens the CPT's menus and modes, seen on the title line:
+
+| Chord | Index | Effect |
+|---|---|---|
+| CODE + L | 1F | `LINE SPACING  1 2 3` |
+| CODE + P | 3E | `PROGRAM  Display Load Label` (the keyboard program's menu) |
+| CODE + O | 36 | `OPERATION NUMBER` |
+| CODE + H | 1E | `Automatic Wraparound Manual` (hyphenation) |
+| CODE + S | 22 | `Direct Control page` |
+| CODE + A | 28 | `1-20` |
+| CODE + U, T, R | 30, 24, 2C | `CODE:` prompts (code entry) |
+| CODE + N | 37 | `.00` (decimal alignment?) |
+| CODE + C | 1B | centers the line, then a new line |
+| CODE + J | 2D | moves the line right, probably flush right [HYPOTHESIS], then a new line |
+| CODE + M | 2F | inserts a format line (a ruler) |
+| CODE + X | 2B | changes the case of the character under the cursor |
+| CODE + backspace | 1A | the cursor back to column 1 |
+| CODE + I, K | 27, 33 | segment 2B, not present |
+| CODE + D, E, V, W | 3B, 3C, 25, 31 | nothing visible yet |
+
+Two features this disk doesn't have:
+- **Segment 41** handles key **0DH** and CODE + 0DH. That's very likely **WORDPAK**: IN, OUT
+  and PRINT are 3DH, 2DH and 7DH, and WORDPAK sits in the same panel column [HYPOTHESIS].
+- **Segment 38** handles key 01H, the keypad keys E0H/E5H, CODE + 01H and CODE + 4CH. It may
+  be a math (column arithmetic) feature [HYPOTHESIS].
+
+**ERASE, INSERT and MOVE don't appear as separate keys in any of the four tables.** Every
+function code a key produces is listed above. What the remaining keys do:
+
+- **4FH** (code B4H, index 0FH, CA17H) is mapped as **ERASE** for now [HYPOTHESIS]. With the
+  cursor on text it blanks the character under it and moves on, whatever unit is selected.
+- **74H** is **TAB**: it moves the cursor to the next tab stop (column 80 with none set).
+  CODE + 74H inserts a tab character (`>` on screen).
+- **CODE + OUT** shows `LINE LIMIT 0`; **CODE + PRINT** shows `PRINTER A B C`.
+- **05H reads the typing line as a document name and brings that document in** at the
+  typing line, in place of the name [CONFIRMED by running it and by disassembly]:
+  - Typing `wn` over the start of the typing line ("P. O. Box 7004") and pressing 05H reads
+    one sector from the disk (t34s15, WN's data) and the line becomes `WORDNET.  RATE: 9600`,
+    WN's text. `mid` gives `  5617  8100  H2` (MID's text). `legal` reads LEGAL's 27 sectors
+    and fills the upper screen with columns of numbers (LEGAL is a format document, its
+    contents are numeric settings) [HYPOTHESIS for the reason LEGAL shows as numbers].
+  - The name ends at the first space. It may start with a drive (`1:`) and is parsed into
+    260AH (length), 260BH (drive − 1) and 260CH (up to 16 characters) by F120H–F17FH; F18AH
+    keeps a copy at 261CH (the last name used) [CONFIRMED by disassembly; the drive prefix
+    not yet run].
+  - The path: the handler returns command 4 to the loop around the editor (EF07H, block 1),
+    which calls EAA8H (segment 31 function 00). EAA8H refuses (beeps) on an empty filler row
+    or a format line, allows up to 5 levels (counter 2633H), parks the typing line in the
+    one-line buffer at 4F00H (pointer 04E7H; it's linked to the ruler at 50D4H), allocates
+    two 256-byte buffers (2631H, 262EH), then ECE3H copies and checks the name. Segment 0C
+    function 00 (stub F298H) loads the document with A = 1 and is called again with A = 0
+    when the level closes.
+  - The far-call stubs it uses: F26EH = 23.0D, F274H = 23.11, F27AH = 23.15, F280H = 23.12,
+    F286H = 00.00, F28CH = 12.07, F292H = 12.08, F298H = 0C.00, F29EH = 23.03,
+    F2A4H = 23.1E, F2AAH = 29.01 (show a message). Segment 23's function table really starts
+    at B23FH (one byte after the pointer `cptsegs.py` prints).
+  - **A bad name is what made the line vanish** in the earlier tests. With "Mr. Carl Wales"
+    on the typing line the name is `Mr.`, ECE3H rejects it, shows message 6.53
+    `THE #PAGE LABEL CONTAINS AN IMPROPER CHARACTER.` (`#` is filled in from 2639H), plays
+    the two-tone error sound (2000 Hz then 1000 Hz) and leaves through EC74H. That exit frees
+    the buffers and drops the level back to 0 but doesn't put the parked line back from
+    4F00H, so it's gone from the document [CONFIRMED by running it; whether the real machine
+    also loses the line here is VERIFY].
+  - Messages 6.51–6.55 around it all talk about "page labels", so the name is probably
+    called a page label in CPT's terms [HYPOTHESIS].
+  - **CODE + 05H** (command 5) closes the level. Scrolling with UP/DOWN inside the level
+    works like normal editing.
+
+  This is a "bring in a stored document" (merge or recall) key, not MOVE or INSERT. Per the
+  user it is the key under WORDPAK, labelled with a staple shape (a bar with a leg down at
+  each end); it's mapped as STAPLE in the browser panel. It fits that column: IN, OUT, PRINT
+  and 05H are the four keys whose handlers return a command (1–4) to the command level. Its
+  number doesn't follow the column's low-digit pattern (that would give 1DH), but PAGE (5FH)
+  breaks the pattern too.
+
 ## The speaker **[CONFIRMED by disassembly and by running it]**
 
 The speaker is driven by the 8253's **counter 0** (port 1CH; control port 1FH). Counter 0
@@ -394,7 +583,7 @@ Key numbers, from the table and a sweep that typed each function key into the ru
 | 63 62 53 52 43 42 33 32 23 | a s d f g h j k l | (home row; the other letters and digits follow a typewriter layout) |
 | 10H | 20H | space |
 | 14H | B6H | **RETURN** (new line; the line count goes up) |
-| 06H | B5H | backspace (deletes the previous character) |
+| 06H | B5H | **backspace**: moves the cursor back one column without erasing; the next character typed overwrites (so "Hello", backspace, "world" gives "Hellworld"). Not ERASE |
 | 4FH | B4H | a space [HYPOTHESIS: required space] |
 | 07H, 77H | 80H | CODE |
 | 70H | 81H | SHIFT |
@@ -403,7 +592,7 @@ Key numbers, from the table and a sweep that typed each function key into the ru
 | 3DH, 2DH, 7DH | A1H, A2H, A3H | **IN**, **OUT**, **PRINT**: open a prompt on the top line (`OUT        1 WORLD`: a number and the name typed, upper-cased) |
 | 73H | AAH | HOLD (status row) |
 | 71H | B9H | margin set (83 on the ruler) |
-| 75H | B8H | tab set (84 on the ruler) |
+| 75H | B8H | **CLEAR TAB SET**: toggles a tab stop at the cursor's column (84 on the ruler); a second press there clears it. A momentary key, not a locking one (per the user, then confirmed) |
 | 69H, 74H | DFH, B7H | moves the cursor to column 85 (the window scrolls with `C1`) |
 | 18 49 19 59 4A 1A 5A 4B 1B 5B | E6 E7 E8 E9 EA EB EC ED EE EF | keypad 0–9 |
 | 6AH, 6BH, 6CH | E4H, E2H, E3H | keypad `.` `,` `-` |

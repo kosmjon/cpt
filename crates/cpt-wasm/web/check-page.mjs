@@ -43,6 +43,9 @@ function el(tag = "div") {
     dispatch: async (t, ev = {}) => {
       for (const f of listeners[t] || []) await f(ev);
     },
+    attrs: {},
+    setAttribute: (n, v) => (e.attrs[n] = String(v)),
+    getAttribute: (n) => (n in e.attrs ? e.attrs[n] : null),
     appendChild: (c) => e.children.push(c),
     click: () => e.dispatch("click"),
     querySelector: (sel) => e.sub[sel],
@@ -186,8 +189,8 @@ async function tap(code) {
   await frames(1);
 }
 
-// Wait for main() to start (it awaits fetch + instantiate).
-for (let i = 0; i < 50 && !rafCallback; i++) await new Promise((r) => setImmediate(r));
+// Wait for main() to start (it awaits fetch + instantiate, which is slow on a busy machine).
+for (let i = 0; i < 1000 && !rafCallback; i++) await sleep(10);
 await frames(3);
 // Powered up, idle: a black screen, waiting for a program disk in drive 1 (no demo).
 assert.equal(background, "#000000", "a black screen");
@@ -272,6 +275,11 @@ assert.ok(allDark(0), "the title line stays white on black with a prompt in it")
 const lineNo = () => Number((/(\d+)\s+(\d+)\s*([A-Z]*)\s*$/.exec(rowText(0).slice(60)) || [])[2]);
 const panelKey = (label) => specialKeys.children.find((k) => k.dataset && k.dataset.label === label);
 assert.ok(panelKey("UP") && panelKey("DOWN"), "UP and DOWN are on the panel");
+const staple = panelKey("STAPLE");
+assert.ok(staple, "the staple key is on the panel, under WORDPAK");
+assert.ok(staple.innerHTML.startsWith("<svg"), "drawn as a staple, not written");
+assert.equal(staple.getAttribute("aria-label"), "staple", "with a name for screen readers");
+assert.equal(staple.title, "staple", "and identified (not 'not yet identified')");
 for (let i = 0; i < 2; i++) {
   await panelKey("UP").dispatch("click");
   await sleep(300);

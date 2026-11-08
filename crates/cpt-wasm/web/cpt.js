@@ -255,14 +255,23 @@ function setupPower(ws, keys, drives) {
 
 // The CPT special keys, 5 columns x 5 rows (from special-keys.md), listed column-major.
 // `mod: true` marks a latching modifier (CODE, held for chords like CODE+IN); `lock: true` a
-// lock-on/lock-off key.
+// lock-on/lock-off key (none at present: CLEAR TAB SET turned out to be momentary).
 const SPECIAL_KEY_COLUMNS = [
-  [{ t: "CODE", mod: true }, { t: "CLEAR\nTAB\nSET", lock: true }, { t: "HOLD" }, { t: "MAR\nSET" }, { t: "MAR\nREL" }],
+  [{ t: "CODE", mod: true }, { t: "CLEAR\nTAB\nSET" }, { t: "HOLD" }, { t: "MAR\nSET" }, { t: "MAR\nREL" }],
   [{ t: "CODE", mod: true }, { t: "INSERT" }, { t: "PROG" }, { t: "MOVE" }, { t: "ERASE" }],
   [{ t: "STOP" }, { t: "SKIP" }, { t: "ADJ" }, { t: "UP" }, { t: "DOWN" }],
   [{ t: "CHAR" }, { t: "WORD" }, { t: "LINE" }, { t: "PARA" }, { t: "PAGE" }],
-  [{ t: "IN" }, { t: "OUT" }, { t: "PRINT" }, { t: "WORDPAK" }, null],
+  [{ t: "IN" }, { t: "OUT" }, { t: "PRINT" }, { t: "WORDPAK" }, { t: "STAPLE", icon: "staple" }],
 ];
+
+// Key caps drawn rather than written. The key under WORDPAK is marked with a staple shape:
+// a bar across the top with a short leg down at each end, one connected line.
+const KEY_ICONS = {
+  staple:
+    '<svg viewBox="0 0 24 14" width="24" height="14" aria-hidden="true" focusable="false">' +
+    '<path d="M3 13 V2 H21 V13" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="square" stroke-linejoin="miter"/></svg>',
+};
 
 // The keyboard paths into the system: the PC keyboard (physical keys -> CPT key numbers) and
 // the special-key panel (labels -> CPT key numbers), with CODE latched on the panel forming a
@@ -332,8 +341,14 @@ function setupSpecialKeys(ws, keys) {
       }
       const el = document.createElement("button");
       el.className = "key";
-      el.innerHTML = spec.t.split("\n").join("<br>");
       el.dataset.label = spec.t.replace(/\n/g, " ");
+      if (spec.icon) {
+        el.innerHTML = KEY_ICONS[spec.icon];
+        el.setAttribute("aria-label", el.dataset.label.toLowerCase());
+        el.title = el.dataset.label.toLowerCase();
+      } else {
+        el.innerHTML = spec.t.split("\n").join("<br>");
+      }
       const k = SPECIAL_LABEL_KEYS[el.dataset.label];
       if (k === undefined) el.title = "not yet identified on the real CPT system";
 
