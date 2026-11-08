@@ -5,6 +5,13 @@ processing systems (CPT 8000 / 9000 and related), which were written in **MOL80*
 Machine-Oriented Language for the Intel 8080, used by CPT (Eden Prairie, MN) in the late
 1970s and early 1980s.
 
+![The real CPT word-processing software running in the browser emulator: a letter on the
+CPT screen with the title line, the ruler and the reverse-video rows, next to the
+special-key panel and the POWER and RESET buttons](CPT%208000%20Emulator.png)
+
+*The original CPT software, booted from a real program disk image, running in the browser
+emulator (`run-web.bat`).*
+
 ## Components
 
 ### `mol80asm` — MOL80 assembler / transpiler (working)
