@@ -5,9 +5,10 @@
 //! read out of the real system code; each rule notes where it came from. Rules marked
 //! [HYPOTHESIS] are inferred from how the software uses a code, not from the hardware.
 //!
-//! The screen is black on white. Per the user, the title row, the ruler and the status row are
-//! white on black, and the document text and the typing line (just above the ruler) are black
-//! on white.
+//! The screen is black on white. Per the user, the title line and the ruler are white on black
+//! with no black-on-white cells at all, the status (column, line, unit) shows at the right end
+//! of the title line, and the document text and the typing line (just above the ruler) are
+//! black on white.
 //!
 //! Stream format:
 //! - `00`-`AF`: a visible character, one column each. `20`-`7E` are ASCII; `A0` is a required
@@ -19,9 +20,9 @@
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
-//! - `B0`: a per-character attribute slot: the next character is white on black. The title and
-//!   status rows have one before every character (the title two), and text rows have none.
-//!   [HYPOTHESIS, chosen because it gives the user's reverse rows.]
+//! - `B0`: a per-character attribute slot. A row with slots (the title and status rows; text
+//!   rows have none) is white on black from edge to edge, including the few characters that
+//!   have no slot of their own. [HYPOTHESIS for how it is coded; the result is the user's.]
 //! - `80`-`8F` (the ruler glyphs) are drawn white on black by the character ROM itself
 //!   [HYPOTHESIS: the ruler has no slots but is reverse on the real screen].
 //! - `B1`: end of the screen (the walker at 8580H substitutes B1 for a link to 0000H).
@@ -31,18 +32,30 @@
 //! - `BD`: comes before a hyphen at a line break in document text (`con` `BD` `-` `0D`)
 //!   [HYPOTHESIS: marks a hyphen the system added, as opposed to one typed].
 //! - `B4`/`B5`: half-line down/up (sub/superscript; the printer path at 9C64H moves +2/-2).
-//! - `C0`: starts every row and ends every status message.
+//! - `C0`: starts every row the system builds and ends every status message. Document lines
+//!   (after a document's first) are separate buffers without it. A bare `C0 0D` is a filler
+//!   row with no document text, for example above the start of the document. The screen shows
+//!   those as empty white-on-black lines, except the typing line (the row above the main
+//!   ruler), which stays black on white (per the user).
 //! - `C1 xx`: horizontal scroll for the rows that follow: the first visible column is
 //!   `NOT xx` (routine BAC6H steps it to keep the cursor in an 80-column window). `C1 FF`
 //!   (no scroll) brackets the title and status rows, which never scroll.
 //! - `C2 lo hi`: jump to `hi lo`; a jump to 0000H ends the screen.
 //! - `C3 a a b b`: a disarmed jump (E6BAH flips C2 <-> C3 to hide/show an optional row);
-//!   display continues at `b b` (which the builder sets to the byte after it).
+//!   display continues at `b b` (which the builder sets to the byte after it). The optional
+//!   row is the status row (column, line, unit). The screen shows its characters at the right
+//!   end of the title row, so the decoder merges it there instead of adding a row (per the
+//!   user; how the hardware does it is unknown).
 //! - `C4`: the cursor: the blink routine at 93C0H swaps a B0 slot with C4 and back. The next
 //!   character is shown inverted, so on a white-on-black row it is one black-on-white cell.
 
 /// Columns in the visible window (the builder writes 80-column rows; BAC6H scrolls by 50H).
 pub const WINDOW_COLS: usize = 80;
+
+/// Rows on the screen: the title line, 45 rows through the typing line (04ABH = 45), the
+/// ruler, and 7 rows below it (04ACH = 7). The display list can hold more rows of text after
+/// those (the TOC's ran to 80 when it was below the ruler), but they are not on the screen.
+pub const SCREEN_ROWS: usize = 54;
 
 /// One visible character cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,19 +86,54 @@ pub struct CptScreen {
     pub ending: Ending,
     /// Codes met that this decoder has no rule for (each listed once).
     pub unknown_codes: Vec<u8>,
+    /// The status row (column, line, unit) was merged into the right end of the title row.
+    pub status_merged: bool,
+}
+
+/// Finish a row: a row with attribute slots is white on black from edge to edge, apart from
+/// the cursor cell; other rows keep their per-cell colours (the ruler glyphs).
+fn finish_row(row: &mut [Cell], cursor_cells: &[bool], has_slots: bool) {
+    if has_slots {
+        for (cell, &cur) in row.iter_mut().zip(cursor_cells) {
+            cell.reverse = !cur;
+        }
+    }
+}
+
+/// Merge the status row into the title row: its characters (not its blanks) replace the
+/// title's at the same columns, so the column, line and unit show at the title's right end.
+fn merge_status(title: &mut Vec<Cell>, status: &[Cell]) {
+    for (i, cell) in status.iter().enumerate() {
+        if cell.code == 0x20 || cell.code == 0xA0 {
+            continue;
+        }
+        while title.len() <= i {
+            title.push(Cell { code: 0x20, reverse: true });
+        }
+        title[i] = *cell;
+    }
 }
 
 /// Walk the display list starting at `head`, reading bank-0 memory through `read`.
 pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> CptScreen {
     let mut rows: Vec<Vec<Cell>> = Vec::new();
     let mut row: Vec<Cell> = Vec::new();
+    // Per cell of `row`: whether it is the cursor (shown opposite to its row).
+    let mut row_cursor: Vec<bool> = Vec::new();
     let mut col = 0usize; // logical column within the row, before scrolling
     let mut scroll = 0usize;
     // Attributes for the next visible character, set by the slot codes before it.
-    let mut slot_reverse = false;
     let mut cursor = false;
-    // Whether this row uses attribute slots (B0/C4), i.e. is a white-on-black row.
+    // Whether this row uses attribute slots (B0), i.e. is a white-on-black row.
     let mut row_has_slots = false;
+    // The row being built is the optional status row (reached through a disarmed C3 jump).
+    let mut status_row = false;
+    let mut status_merged = false;
+    // The row being built has a C0 (rows the system builds have one; document lines after
+    // their first do not).
+    let mut row_c0 = false;
+    // Per finished row: (a bare C0 filler row, the main ruler: C0 then only ruler glyphs).
+    let mut kinds: Vec<(bool, bool)> = Vec::new();
     let mut unknown: Vec<u8> = Vec::new();
     let mut jumped_to: Vec<u16> = Vec::new();
     let mut addr = head;
@@ -96,21 +144,33 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
             let next = addr.wrapping_add(1);
             match b {
                 0x0D => {
-                    rows.push(std::mem::take(&mut row));
+                    let mut done = std::mem::take(&mut row);
+                    finish_row(&mut done, &row_cursor, row_has_slots);
+                    row_cursor.clear();
+                    if status_row && !rows.is_empty() {
+                        merge_status(&mut rows[0], &done);
+                        status_merged = true;
+                    } else {
+                        // A bare `C0 0D`: a filler row, with no document text.
+                        let filler = row_c0 && done.is_empty() && !row_has_slots;
+                        let ruler = row_c0
+                            && !done.is_empty()
+                            && done.iter().all(|c| (0x80..=0x8F).contains(&c.code));
+                        kinds.push((filler, ruler));
+                        rows.push(done);
+                    }
+                    status_row = false;
                     col = 0;
-                    slot_reverse = false;
                     cursor = false;
                     row_has_slots = false;
+                    row_c0 = false;
                     if rows.len() >= max_rows {
                         break 'walk Ending::RowLimit;
                     }
                 }
-                0xB0 => {
-                    slot_reverse = true;
-                    row_has_slots = true;
-                }
+                0xB0 => row_has_slots = true,
                 0xC4 => cursor = true,
-                0xC0 => {}
+                0xC0 => row_c0 = true,
                 0xB1 => break 'walk Ending::EndMark(addr),
                 0xC1 => {
                     scroll = (!read(next)) as usize;
@@ -127,6 +187,11 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                         break 'walk Ending::Loop(to);
                     }
                     jumped_to.push(to);
+                    // A disarmed C3 shows the optional row after it: the status row, which
+                    // the screen shows at the right end of the title row.
+                    if b == 0xC3 && row.is_empty() {
+                        status_row = true;
+                    }
                     addr = to;
                     continue;
                 }
@@ -137,14 +202,13 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     }
                 }
                 _ => {
+                    // The ruler glyphs are white on black by themselves; a cursor cell in a
+                    // text row is too. (Slotted rows are settled when the row ends.)
                     let rom_inverse = (0x80..=0x8F).contains(&b);
-                    // The cursor cell is the opposite of its row: black on white in a slotted
-                    // (white-on-black) row, white on black in a text row.
-                    let reverse = if cursor { !row_has_slots } else { slot_reverse || rom_inverse };
                     if col >= scroll && col < scroll + WINDOW_COLS {
-                        row.push(Cell { code: b, reverse });
+                        row.push(Cell { code: b, reverse: rom_inverse || cursor });
+                        row_cursor.push(cursor);
                     }
-                    slot_reverse = false;
                     cursor = false;
                     col += 1;
                 }
@@ -154,9 +218,24 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
         Ending::ByteLimit
     };
     if !row.is_empty() {
+        finish_row(&mut row, &row_cursor, row_has_slots);
         rows.push(row);
+        kinds.push((false, false));
     }
-    CptScreen { rows, ending, unknown_codes: unknown }
+    black_out_filler_rows(&mut rows, &kinds);
+    CptScreen { rows, ending, unknown_codes: unknown, status_merged }
+}
+
+/// Filler rows (a bare `C0 0D`: no document text there, e.g. above the start of the
+/// document) show as empty white-on-black lines, per the user. The typing line (the row just
+/// above the main ruler) stays black on white even when it is empty.
+fn black_out_filler_rows(rows: &mut [Vec<Cell>], kinds: &[(bool, bool)]) {
+    let typing = kinds.iter().position(|k| k.1).and_then(|r| r.checked_sub(1));
+    for (i, (row, &(filler, _))) in rows.iter_mut().zip(kinds).enumerate() {
+        if filler && Some(i) != typing {
+            *row = vec![Cell { code: 0x20, reverse: true }; WINDOW_COLS];
+        }
+    }
 }
 
 /// A printable stand-in for a character ROM code. The CPT glyph shapes are unknown; the ruler
@@ -171,6 +250,8 @@ pub fn glyph(code: u8) -> char {
         0x83 => 'M', // ruler: a margin (left and right)
         0x84 => '>', // ruler: a tab stop
         0x87 => '^', // ruler: the cursor's column (moves as you type)
+        0x8B => '®', // "CPT® WORD PROCESSING SOFTWARE" (start-up message)
+        0x8C => '©', // "COPYRIGHT© 1983 BY CPT CORPORATION"
         0x89 => '>', // [HYPOTHESIS] a tab in text
         _ => '?',
     }
@@ -269,8 +350,29 @@ mod tests {
         let s = run(0x1000, &l, 0x1000);
         assert_eq!(s.rows.len(), 2);
         assert_eq!(text(&s, 0), "AB");
-        assert_eq!(text(&s, 1), "");
+        // The bare `C0 0D` filler row is an empty white-on-black line.
+        assert_eq!(text(&s, 1), " ".repeat(WINDOW_COLS));
+        assert!(s.row_is_reverse(1));
         assert_eq!(s.ending, Ending::EndMark(0x1016));
+    }
+
+    #[test]
+    fn filler_rows_are_black_but_the_typing_line_and_document_blanks_are_not() {
+        // Title; two filler rows; a document line; a blank document line (no C0); the typing
+        // line (filler, just above the ruler); the ruler; B1.
+        let mut l = vec![0xC0, 0xB0, b'T', 0x0D];
+        l.extend([0xC0, 0x0D, 0xC0, 0x0D]);
+        l.extend([b'D', b'o', b'c', 0x0D]);
+        l.extend([0x0D]);
+        l.extend([0xC0, 0x0D]);
+        l.extend([0xC0, 0x87, 0x80, 0x81, 0x83, 0x0D, 0xB1]);
+        let s = run(0x2000, &l, 0x2000);
+        assert_eq!(s.rows.len(), 7);
+        assert!(s.row_is_reverse(1) && s.row_is_reverse(2), "filler rows above the document");
+        assert_eq!(text(&s, 3), "Doc");
+        assert!(s.rows[4].is_empty(), "a blank document line stays black on white");
+        assert!(s.rows[5].is_empty(), "the empty typing line stays black on white");
+        assert!(s.row_is_reverse(6), "the ruler");
     }
 
     #[test]
@@ -325,9 +427,35 @@ mod tests {
         assert!(s.row_is_reverse(0));
         assert!(s.row_is_reverse(1));
         assert_eq!(rev(&s, 2), [false, false]);
-        // A character in a slot row without its slot is black on white.
-        let s = run(0x5000, &[0xC0, 0xB0, b'a', b'1', 0xB0, b'b', 0x0D, 0xB1], 0x5000);
-        assert_eq!(rev(&s, 0), [true, false, true]);
+        // A slotted row is white on black throughout, even where a character has no slot
+        // (the title's column 40 and right end, the status row's numbers).
+        let s = run(0x5000, &[0xC0, 0xB0, b'a', b'1', 0xB0, b'b', b' ', b' ', 0x0D, 0xB1], 0x5000);
+        assert_eq!(rev(&s, 0), [true; 5]);
+    }
+
+    #[test]
+    fn the_status_row_merges_into_the_title_row() {
+        // Title row (slots), a text row, then C3 (disarmed) -> the status row right after it,
+        // then a row below. The status row's characters land at the title's right end.
+        let mut l = vec![0xC0];
+        for &c in b"IN 1 X    " {
+            l.extend([0xB0, c]);
+        }
+        l.extend([0x0D, 0xC0, b'T', 0x0D]);
+        let c3 = 0x6000 + l.len() as u16;
+        let after = c3 + 5;
+        l.extend([0xC3, 0x00, 0x00, after as u8, (after >> 8) as u8, 0xC1, 0xFF, 0xC0]);
+        for &c in b"       7 1" {
+            l.extend([0xB0, c]);
+        }
+        l.extend([0x0D, 0xC0, b'B', 0x0D, 0xB1]);
+        let s = run(0x6000, &l, 0x6000);
+        assert!(s.status_merged);
+        assert_eq!(s.rows.len(), 3, "title, text, the row below: no separate status row");
+        assert_eq!(text(&s, 0), "IN 1 X 7 1");
+        assert!(s.row_is_reverse(0));
+        assert_eq!(text(&s, 1), "T");
+        assert_eq!(text(&s, 2), "B");
     }
 
     #[test]
@@ -343,7 +471,7 @@ mod tests {
         // character is black on white.
         let s = run(0x5000, &[0xC0, 0xB0, b'a', 0xC4, b'b', 0xB0, b'c', 0x0D, 0xB1], 0x5000);
         assert_eq!(rev(&s, 0), [true, false, true]);
-        // In the title's double slots, one swapped slot inverts the character too.
+        // In the title's double slots, one swapped slot makes the cursor too.
         let s = run(0x5000, &[0xC0, 0xB0, 0xB0, b'a', 0xC4, 0xB0, b'b', 0x0D, 0xB1], 0x5000);
         assert_eq!(rev(&s, 0), [true, false]);
         // In a text row (no slots) a cursor cell is white on black.

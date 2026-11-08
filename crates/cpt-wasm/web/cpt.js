@@ -1,9 +1,18 @@
-// JS glue for the CPT wasm display. Loads the wasm module (no wasm-bindgen — plain C ABI),
-// runs a frame each animation tick, reads the 80x60 character grid out of wasm linear memory,
-// and paints it black-on-white on the canvas. The CRT case is styled in HTML/CSS.
+// The CPT 8000 workstation in the browser: the real CPT system (real-cpt.js + the wasm
+// module, no wasm-bindgen: plain C ABI), its screen on a canvas, two 8-inch drives, the
+// special-key panel, the PC keyboard, and POWER / RESET.
+//
+// Like the real machine, it powers up idle with a black screen, waiting for a program disk in
+// drive 1. Inserting one boots it. Once booted, the program disk can come out and the system
+// keeps running. POWER off stops the machine (the disks stay in); POWER on and RESET boot
+// again from the disk in drive 1, or wait for one.
 
 const CELL_W = 10; // px per character cell
 const CELL_H = 16;
+
+const PAGE = "#e8f0f0"; // the screen's white (slight cyan tint)
+const INK = "#101418"; // its black
+const GLASS_OFF = "#22272a"; // a powered-off tube
 
 async function main() {
   const resp = await fetch("cpt_wasm.wasm");
@@ -11,237 +20,255 @@ async function main() {
   // No imports needed: the module is self-contained (panic=abort, no std I/O).
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const w = instance.exports;
-
-  w.cpt_init();
-
-  const cols = w.cpt_cols();
-  const rows = w.cpt_rows();
-  const titleRow = w.cpt_title_row();
-  const typingRow = w.cpt_typing_row();
-  const statusRow = w.cpt_status_row();
+  const real = new RealCpt(w);
 
   const canvas = document.getElementById("screen");
-  canvas.width = cols * CELL_W;
-  canvas.height = rows * CELL_H;
   const ctx = canvas.getContext("2d");
+  canvas.width = w.cpt_real_cols() * CELL_W;
+  canvas.height = REAL_SCREEN_ROWS * CELL_H;
   ctx.font = `${CELL_H - 2}px "Courier New", monospace`;
   ctx.textBaseline = "top";
-
-  const pagePtr = w.cpt_page_ptr();
-  const pageLen = w.cpt_page_len();
-
-  function readPage() {
-    // The page buffer lives in wasm linear memory; view it fresh each frame in case memory grew.
-    return new Uint8Array(w.memory.buffer, pagePtr, pageLen);
-  }
-
   const statusEl = document.getElementById("status");
 
-  // --- disk drives ---
-  const drives = setupDrives(w);
-
-  // --- speaker: live playback through the Web Audio API ---
-  const speaker = setupSpeaker(w);
-
-  // --- special-key cluster ---
-  setupSpecialKeys(w, speaker);
-
-  // --- real PC keyboard for the non-special (typewriter) keys ---
-  setupHostKeyboard(w);
+  const ws = { w, real, powered: true };
+  const keys = setupKeyboard(ws);
+  const drives = setupDrives(ws);
+  setupPower(ws, keys, drives);
+  setupSpecialKeys(ws, keys);
 
   function render() {
-    w.cpt_run_frame();
-    speaker.onFrame();
-    const page = readPage();
-
-    // Page-white: pale background, dark text.
-    ctx.fillStyle = "#e8f0f0"; // page-white (slight cyan tint, like the CPT 9000)
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = "#101418"; // near-black text
-    for (let r = 0; r < rows; r++) {
-      const y = r * CELL_H;
-      for (let c = 0; c < cols; c++) {
-        const code = page[r * cols + c];
-        if (code >= 0x20 && code <= 0x7e) {
-          ctx.fillText(String.fromCharCode(code), c * CELL_W + 1, y + 1);
-        }
-      }
+    if (!ws.powered) {
+      ctx.fillStyle = GLASS_OFF;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      statusEl.textContent = "power is off";
+    } else if (real.running) {
+      real.frame();
+      drawRealScreen(ctx, canvas, real);
+      statusEl.textContent = real.settled
+        ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN)"
+        : `starting the CPT system… ${Math.round(real.startProgress * 100)}%`;
+    } else {
+      // Powered and idle: a black screen, waiting for a program disk in drive 1.
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      statusEl.textContent = "insert a CPT program disk in drive 1";
     }
-
-    // Faint region guides so the CPT page structure is visible.
-    ctx.strokeStyle = "rgba(0,0,0,0.12)";
-    ctx.beginPath();
-    for (const row of [titleRow + 1, typingRow, typingRow + 1, statusRow]) {
-      const y = row * CELL_H + 0.5;
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-    }
-    ctx.stroke();
-
-    drives.updateLeds();
-
-    statusEl.textContent = `retraces: ${w.cpt_retraces()}`;
+    drives.update();
     requestAnimationFrame(render);
   }
-
   requestAnimationFrame(render);
 }
 
-// The speaker: schedules the machine's tone changes on a Web Audio oscillator, and starts the
-// demo melody when asked (CODE + WORDPAK).
-function setupSpeaker(w) {
-  const audio = new SpeakerAudio(
-    window.AudioContext || window.webkitAudioContext,
-    w.cpt_cpu_hz(),
-    w.cpt_tone_hz(),
-  );
-  return {
-    // Called once per frame, right after the machine has run: hand over its new tone changes.
-    onFrame() {
-      const n = w.cpt_speaker_count();
-      if (n > 0) audio.schedule(new Float64Array(w.memory.buffer, w.cpt_speaker_ptr(), n * 2), n);
-    },
-    // Turn sound on (this must be inside a click) and start the melody.
-    playMelody() {
-      if (!audio.enable()) {
-        document.getElementById("status").textContent = "this browser has no Web Audio";
-        return;
+// Draw the real system's decoded screen: black on white, with white-on-black cells (the title
+// line, the ruler, format lines, rows with no document text). A row's colour carries on to its
+// right edge, as on the CPT's own display.
+function drawRealScreen(ctx, canvas, real) {
+  const s = real.screen();
+  ctx.fillStyle = PAGE;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let r = 0; r < Math.min(s.rows, REAL_SCREEN_ROWS); r++) {
+    const y = r * CELL_H;
+    let last = -1;
+    for (let c = 0; c < s.cols; c++) {
+      const a = s.attrs[r * s.cols + c];
+      if (!(a & 1)) continue;
+      last = c;
+      const rev = (a & 2) !== 0;
+      if (rev) {
+        ctx.fillStyle = INK;
+        ctx.fillRect(c * CELL_W, y, CELL_W, CELL_H);
       }
-      audio.reanchor();
-      w.cpt_play_melody();
-    },
-  };
+      const ch = cptGlyph(s.codes[r * s.cols + c]);
+      if (ch !== " ") {
+        ctx.fillStyle = rev ? PAGE : INK;
+        ctx.fillText(ch, c * CELL_W + 1, y + 1);
+      }
+    }
+    if (last >= 0 && last < s.cols - 1 && s.attrs[r * s.cols + last] & 2) {
+      ctx.fillStyle = INK;
+      ctx.fillRect((last + 1) * CELL_W, y, (s.cols - last - 1) * CELL_W, CELL_H);
+    }
+  }
 }
 
-// Wire the two 8-inch drives. Each has one vertical button with a red activity LED. The
-// button's action depends on state:
-//   empty            -> open the file chooser (insert)
-//   has disk, idle   -> eject (flush + download the image)
-//   has disk, active -> do nothing (can't eject mid-I/O; the LED is lit)
-// The LED tracks cpt_disk_active(station), polled each frame via the returned updateLeds().
-function setupDrives(w) {
+// The two 8-inch drives. Each has one button with a red activity LED:
+//   empty            -> open the file chooser (insert a CPT disk image, 315,392 bytes)
+//   has disk, idle   -> eject it (a disk the system wrote to is offered as a download)
+//   has disk, active -> nothing (can't eject mid-read; the LED is lit)
+// A program disk in drive 1 boots the system when the power is on and nothing is running.
+function setupDrives(ws) {
+  const { w, real } = ws;
   const fileInput = document.getElementById("fileInput");
-  const names = [null, null]; // filename per station (0=A, 1=B)
-  let pendingStation = null;
+  const statusEl = document.getElementById("status");
+  const names = [null, null];
+  let pending = null;
 
-  const driveEl = (s) => document.querySelector(`.drive[data-station="${s}"]`);
-  const ledEl = (s) => driveEl(s).querySelector(".led");
-  const btnEl = (s) => driveEl(s).querySelector(".drive-btn");
+  const driveEl = (d) => document.querySelector(`.drive[data-station="${d}"]`);
+  const ledEl = (d) => driveEl(d).querySelector(".led");
+  const btnEl = (d) => driveEl(d).querySelector(".drive-btn");
 
-  function refresh(s) {
-    const mounted = w.cpt_disk_mounted(s) === 1;
-    const drive = driveEl(s);
-    drive.classList.toggle("loaded", mounted);
-    drive.title = mounted
-      ? `${names[s] || "(disk)"} — press to eject`
-      : "empty — press to insert a disk";
+  function download(bytes, name) {
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
-  function insert(s) {
-    pendingStation = s;
-    fileInput.value = "";
-    fileInput.click();
+  function refresh(d) {
+    const loaded = real.drive(d).loaded;
+    const el = driveEl(d);
+    el.classList.toggle("loaded", loaded);
+    el.title = loaded
+      ? `${names[d] || "(disk)"} — press to eject`
+      : d === 0
+        ? "empty — press to insert a disk (a CPT program disk boots the system)"
+        : "empty — press to insert a disk";
   }
 
-  function eject(s) {
-    // Only offer a download if the disk was actually written while mounted — so ejecting an
-    // unmodified disk doesn't force an unwanted save dialog.
-    const wasModified = w.cpt_disk_modified(s) === 1;
-    const len = w.cpt_disk_eject(s);
-    if (len === 0) return; // refused (active) or nothing mounted
-    if (wasModified) {
-      const bytes = new Uint8Array(w.memory.buffer, w.cpt_xfer_ptr(), len).slice();
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = names[s] || `drive${s + 1}.img`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
-    names[s] = null;
-    refresh(s);
-  }
-
-  // The single button: behavior depends on state.
-  for (const s of [0, 1]) {
-    btnEl(s).addEventListener("click", () => {
-      const mounted = w.cpt_disk_mounted(s) === 1;
-      const active = w.cpt_disk_active(s) === 1;
-      if (!mounted) {
-        insert(s);
-      } else if (!active) {
-        eject(s);
+  for (const d of [0, 1]) {
+    btnEl(d).addEventListener("click", () => {
+      const st = real.drive(d);
+      if (!st.loaded) {
+        pending = d;
+        fileInput.value = "";
+        fileInput.click();
+      } else if (!st.active) {
+        const bytes = real.eject(d);
+        if (bytes && st.modified) download(bytes, names[d] || `drive${d + 1}.img`);
+        names[d] = null;
+        refresh(d);
       }
-      // mounted && active -> do nothing (safety)
     });
   }
 
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files[0];
-    if (!file || pendingStation === null) return;
+    const d = pending;
+    pending = null;
+    if (!file || d === null) return;
     const buf = new Uint8Array(await file.arrayBuffer());
-    const ptr = w.cpt_xfer_reserve(buf.length);
-    new Uint8Array(w.memory.buffer, ptr, buf.length).set(buf);
-    if (w.cpt_disk_mount(pendingStation) === 1) names[pendingStation] = file.name;
-    refresh(pendingStation);
-    pendingStation = null;
+    if (!real.insert(d, buf)) {
+      statusEl.textContent = `${file.name}: not a CPT disk image (${w.cpt_real_disk_bytes()} bytes)`;
+      return;
+    }
+    names[d] = file.name;
+    // A program disk in drive 1 of an idle, powered machine: boot it.
+    if (d === 0 && ws.powered && !real.running) real.start();
+    refresh(0);
+    refresh(1);
   });
 
   refresh(0);
   refresh(1);
-
   return {
-    updateLeds() {
-      for (const s of [0, 1]) {
-        ledEl(s).classList.toggle("on", w.cpt_disk_active(s) === 1);
+    update() {
+      for (const d of [0, 1]) {
+        ledEl(d).classList.toggle("on", ws.powered && real.drive(d).active);
+        driveEl(d).classList.toggle("loaded", real.drive(d).loaded);
       }
     },
   };
 }
 
-// The CPT special keys, 5 columns x 5 rows (from special-keys.md). Each entry is the keycap
-// label (lines split on "\n"); `lock: true` marks a locking key; null is the blank position.
-// Listed column-major here, matching the spec's columns.
-// `mod: true` marks a latching modifier (held down to form chords like CODE+IN); `lock: true`
-// marks a lock-on/lock-off key (e.g. CLEAR TAB SET).
+// POWER (with a green LED) and RESET, under the special keys.
+//   POWER off: the machine stops and the screen goes dark; the disks stay in their drives.
+//   POWER on, RESET: boot from the disk in drive 1, or wait (black screen) for one.
+function setupPower(ws, keys, drives) {
+  const { real } = ws;
+  const powerBtn = document.getElementById("powerBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  const led = powerBtn.querySelector(".led");
+  function show() {
+    led.classList.toggle("on", ws.powered);
+    powerBtn.title = ws.powered ? "power is on — press to turn off" : "power is off — press to turn on";
+    resetBtn.disabled = !ws.powered;
+  }
+  powerBtn.addEventListener("click", () => {
+    keys.releaseAll();
+    ws.powered = !ws.powered;
+    if (ws.powered) real.start();
+    else real.halt();
+    show();
+    drives.update();
+  });
+  resetBtn.addEventListener("click", () => {
+    if (!ws.powered) return;
+    keys.releaseAll();
+    real.start(); // stops the running system first; waits if drive 1 is empty
+  });
+  show();
+}
+
+// The CPT special keys, 5 columns x 5 rows (from special-keys.md), listed column-major.
+// `mod: true` marks a latching modifier (CODE, held for chords like CODE+IN); `lock: true` a
+// lock-on/lock-off key.
 const SPECIAL_KEY_COLUMNS = [
-  // Column 1
   [{ t: "CODE", mod: true }, { t: "CLEAR\nTAB\nSET", lock: true }, { t: "HOLD" }, { t: "MAR\nSET" }, { t: "MAR\nREL" }],
-  // Column 2
   [{ t: "CODE", mod: true }, { t: "INSERT" }, { t: "PROG" }, { t: "MOVE" }, { t: "ERASE" }],
-  // Column 3
   [{ t: "STOP" }, { t: "SKIP" }, { t: "ADJ" }, { t: "UP" }, { t: "DOWN" }],
-  // Column 4
   [{ t: "CHAR" }, { t: "WORD" }, { t: "LINE" }, { t: "PARA" }, { t: "PAGE" }],
-  // Column 5
   [{ t: "IN" }, { t: "OUT" }, { t: "PRINT" }, { t: "WORDPAK" }, null],
 ];
 
-// Build the special-key panel. Keys render in row-major order (CSS grid), press with a tactile
-// animation, and locking keys toggle a locked-on state. Clicks are not yet wired to the machine
-// (no keyboard device / known key codes yet) — they log for now.
-// Shared latched-modifier state, so both the on-screen panel and the host PC keyboard honor
-// chords (e.g. latch CODE on screen, then type a letter -> CODE+letter). Each entry is
-// { code, el } for a currently-held modifier.
-const latchedMods = [];
+// The keyboard paths into the system: the PC keyboard (physical keys -> CPT key numbers) and
+// the special-key panel (labels -> CPT key numbers), with CODE latched on the panel forming a
+// chord with the next key from either.
+function setupKeyboard(ws) {
+  const { real } = ws;
+  const latched = []; // { key, el } for each latched panel modifier
+  const held = new Set(); // PC KeyboardEvent.code values held down
 
-// Release all latched modifiers (send their break events) and clear the held state + visuals.
-// Called after a non-modifier key is struck, completing any chord (the modifier's make was
-// already sent when it latched, so the downstream software sees modifier-down ... key ...
-// modifier-up, exactly like a real two-finger chord).
-function releaseLatchedMods(w) {
-  for (const m of latchedMods) {
-    w.cpt_key_up(m.code);
-    if (m.el) m.el.classList.remove("held");
+  const press = (k) => { if (real.running) real.press(k); };
+  const release = (k) => { if (real.running) real.release(k); };
+
+  function releaseLatched() {
+    for (const m of latched) {
+      release(m.key);
+      m.el.classList.remove("held");
+    }
+    latched.length = 0;
   }
-  latchedMods.length = 0;
+
+  // Release everything held (power off, reset, the window losing focus).
+  function releaseAll() {
+    for (const code of held) {
+      const k = real.keyForPcCode(code);
+      if (k !== null) release(k);
+    }
+    held.clear();
+    releaseLatched();
+  }
+
+  function pcKey(e, down) {
+    if (!real.running || e.ctrlKey || e.metaKey) return; // leave browser shortcuts alone
+    const k = real.keyForPcCode(e.code);
+    if (k === null) return;
+    e.preventDefault();
+    if (down) {
+      if (held.has(e.code)) return; // auto-repeat: the CPT does its own
+      held.add(e.code);
+      press(k);
+    } else {
+      held.delete(e.code);
+      release(k);
+      releaseLatched(); // a real key completes a chord with a latched panel CODE
+    }
+  }
+  window.addEventListener("keydown", (e) => pcKey(e, true));
+  window.addEventListener("keyup", (e) => pcKey(e, false));
+  window.addEventListener("blur", releaseAll);
+
+  return { press, release, latched, releaseLatched, releaseAll };
 }
 
-function setupSpecialKeys(w, speaker) {
+// Build the special-key panel. Keys press with a tactile animation; CODE latches until the
+// next key; locking keys toggle a locked-on look. Keys not yet identified on the real system
+// say so in their tooltip and do nothing.
+function setupSpecialKeys(ws, keys) {
   const grid = document.getElementById("specialKeys");
   if (!grid) return;
-
   for (let row = 0; row < 5; row++) {
     for (let col = 0; col < 5; col++) {
       const spec = SPECIAL_KEY_COLUMNS[col][row];
@@ -251,100 +278,45 @@ function setupSpecialKeys(w, speaker) {
         grid.appendChild(blank);
         continue;
       }
-      const key = document.createElement("button");
-      key.className = "key";
-      key.innerHTML = spec.t.split("\n").join("<br>");
-      key.dataset.label = spec.t.replace(/\n/g, " ");
-
-      // Assign a placeholder CPT key code (0xE0+) per special key. [VERIFY] real codes.
-      const code = 0xe0 + row * 5 + col;
-      key.dataset.code = code;
+      const el = document.createElement("button");
+      el.className = "key";
+      el.innerHTML = spec.t.split("\n").join("<br>");
+      el.dataset.label = spec.t.replace(/\n/g, " ");
+      const k = SPECIAL_LABEL_KEYS[el.dataset.label];
+      if (k === undefined) el.title = "not yet identified on the real CPT system";
 
       if (spec.mod) {
-        // Latching modifier (CODE): click latches it down (make, no break yet); click again
-        // unlatches (break). It stays held until a non-modifier key is struck or it is clicked
-        // again — reconstructing a two-finger chord with one mouse.
-        key.addEventListener("click", () => {
-          const idx = latchedMods.findIndex((m) => m.el === key);
-          if (idx >= 0) {
-            // Already latched -> unlatch.
-            w.cpt_key_up(code);
-            key.classList.remove("held");
-            latchedMods.splice(idx, 1);
+        // CODE: a click latches it down; it is released after the next key, or by clicking
+        // it again (a two-finger chord with one mouse).
+        el.addEventListener("click", () => {
+          const i = keys.latched.findIndex((m) => m.el === el);
+          if (i >= 0) {
+            keys.release(k);
+            el.classList.remove("held");
+            keys.latched.splice(i, 1);
           } else {
-            w.cpt_key_down(code);
-            key.classList.add("held");
-            latchedMods.push({ code, el: key });
+            keys.press(k);
+            el.classList.add("held");
+            keys.latched.push({ key: k, el });
           }
-        });
-      } else if (spec.lock) {
-        // Lock-on/lock-off key (e.g. CLEAR TAB SET): toggles a locked state, press pair each time.
-        key.addEventListener("click", () => {
-          key.classList.toggle("locked");
-          w.cpt_key_down(code);
-          w.cpt_key_up(code);
-          releaseLatchedMods(w);
         });
       } else {
-        // Momentary key: make + (release latched mods) + its own break — forming any chord.
-        key.addEventListener("click", () => {
-          key.classList.add("pressed");
-          setTimeout(() => key.classList.remove("pressed"), 90);
-          // CODE + WORDPAK is a host shortcut: it starts the speaker demo. The key events
-          // below still reach the machine as usual. (This click is also the user gesture that
-          // browsers require before they will play any audio.)
-          if (spec.t === "WORDPAK" && latchedMods.some((m) => m.el && m.el.dataset.label === "CODE")) {
-            speaker.playMelody();
-          }
-          w.cpt_key_down(code);
-          w.cpt_key_up(code);
-          releaseLatchedMods(w);
+        el.addEventListener("click", () => {
+          el.classList.add("pressed");
+          setTimeout(() => el.classList.remove("pressed"), 90);
+          if (spec.lock) el.classList.toggle("locked");
+          if (k === undefined) return;
+          keys.press(k);
+          // Hold the key for a typist's 40 ms, so the system sees an ordinary tap.
+          setTimeout(() => {
+            keys.release(k);
+            keys.releaseLatched();
+          }, 40);
         });
-        if (spec.t === "WORDPAK") key.title = "CODE + WORDPAK: play the speaker demo";
       }
-      grid.appendChild(key);
+      grid.appendChild(el);
     }
   }
-}
-
-// Capture the real PC keyboard for the non-special (typewriter) keys and forward make/break
-// events to the machine. The PC-key -> CPT-code mapping is a placeholder ([VERIFY]): printable
-// characters send their ASCII code; a few named keys map to control codes.
-function setupHostKeyboard(w) {
-  // Map a KeyboardEvent to a CPT key code, or null to ignore (let the browser handle it).
-  function codeFor(e) {
-    // Ignore modifier-only keys and browser shortcuts (Ctrl/Alt/Meta held).
-    if (e.ctrlKey || e.altKey || e.metaKey) return null;
-    const named = {
-      Enter: 0x0d,
-      Backspace: 0x08,
-      Tab: 0x09,
-      Escape: 0x1b,
-      " ": 0x20,
-    };
-    if (e.key in named) return named[e.key];
-    // Single printable character -> its ASCII code.
-    if (e.key.length === 1) {
-      const c = e.key.charCodeAt(0);
-      if (c >= 0x20 && c <= 0x7e) return c;
-    }
-    return null;
-  }
-
-  window.addEventListener("keydown", (e) => {
-    const code = codeFor(e);
-    if (code === null) return;
-    e.preventDefault(); // keep the browser from acting on keys we consume (Tab, Backspace, …)
-    if (!e.repeat) w.cpt_key_down(code);
-  });
-  window.addEventListener("keyup", (e) => {
-    const code = codeFor(e);
-    if (code === null) return;
-    e.preventDefault();
-    w.cpt_key_up(code);
-    // A real key completes any pending on-screen chord (e.g. latched CODE + typed letter).
-    releaseLatchedMods(w);
-  });
 }
 
 main().catch((e) => {

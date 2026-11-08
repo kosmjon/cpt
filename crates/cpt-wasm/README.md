@@ -1,8 +1,14 @@
-# cpt-wasm — WebAssembly display
+# cpt-wasm — the CPT 8000 in a browser
 
-A minimal WebAssembly boundary that runs the CPT machine core in a browser and paints the
-page-white display on a canvas, inside a styled CRT case. No `wasm-bindgen`: the module uses a
-plain C ABI, and the JS glue reads the 80×60 character grid straight out of wasm linear memory.
+A WebAssembly boundary that runs the real CPT system (booted from a real program disk image)
+in a browser, with its screen on a canvas inside a styled CRT case, two 8-inch drives, the
+special-key panel, POWER and RESET. No `wasm-bindgen`: the module uses a plain C ABI, and the
+JS glue reads the decoded screen straight out of wasm linear memory.
+
+The page powers up idle with a black screen, waiting for a program disk in drive 1, as the
+real machine did. (The module still contains the earlier demo machine and its exports, used
+by the `check.mjs`, `check-kbd.mjs`, `check-disk.mjs` and `check-audio.mjs` Node checks; the
+page no longer runs it. `run-web.bat` in the repository root builds and serves the page.)
 
 ## Build and run
 
@@ -19,8 +25,8 @@ npx serve crates/cpt-wasm/web
 #    or:  python -m http.server --directory crates/cpt-wasm/web 8080
 ```
 
-Open the served page; you'll see the CPT page-white screen draw the demo (title, text,
-typing-line ruler, status line) and scroll via the emulated vertical-retrace interrupt.
+Open the served page and insert a CPT program disk image in drive 1 (see "The real CPT
+system" below).
 
 ## Quick check without a browser
 
@@ -45,13 +51,90 @@ Disk drives (stations 0 = A, 1 = B):
 The web page shows two drive bays beside the screen with Insert (file picker) / Eject
 (download) buttons.
 
-## Speaker (live audio)
+## The real CPT system
 
-On the page, latch **CODE** on the special-key panel and then press **WORDPAK**: the speaker
-demo (`speaker/melody.mol`, a C-major scale and a beep, assembled inside the wasm module)
-plays through the Web Audio API. That click is also the user gesture browsers require before
-they allow audio, so there is nothing else to turn on. The key events still reach the machine as
-usual; the chord itself is a host shortcut handled by the page.
+The page powers up idle with a black screen. Insert a real CPT program disk image in
+**drive 1** and it boots the real CPT software. The image must be the raw 77 × 16 × 256 =
+315,392-byte form;
+make it from the TeleDisk file with:
+
+```sh
+python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img
+```
+
+**Start-up.** The software checks disk timing. Reads must take about 31 ms or more, as on a
+real 8-inch drive, or it reports "THE DISK IN STATION 2 SEEMS TO BE FAULTY". So the page keeps
+real disk timing and instead runs the emulation faster than real time until the system has
+settled (about 37 s of emulated time). That takes under a second in a browser, with a
+progress note under the screen. After that it runs in real time.
+
+**Screen.** The decoded display list, black on white, with the title line and ruler (and
+documents' format lines) white on black. The status (column, line, unit) shows at the right
+end of the title line. Rows with no document text, such as the rows above the start of the
+document, are empty black lines; the typing line stays black on white. The screen is 54
+rows: the title line, 45 rows through the typing line, the ruler and 7 rows below it (the
+system's own layout values at 04ABH and 04ACH). The character ROM's glyph shapes are unknown,
+so its special glyphs are drawn as ASCII stand-ins (`.` `:` `|` ruler ticks, `M` margins, `^`
+the cursor column, `>` tabs).
+
+**Keyboard.** The PC keyboard sends physical key presses and releases, as the CPT keyboard
+did; the CPT software tracks its own SHIFT, LOCK and CODE.
+
+| PC key | CPT key |
+|---|---|
+| letters, digits, `- = ; ' , . /` | the CPT key that types the same character unshifted |
+| Shift | SHIFT |
+| Caps Lock | LOCK |
+| Alt | CODE |
+| Enter | RETURN |
+| Backspace | backspace |
+| ↓ / ↑ | CPT DOWN / UP (by the selected unit, or a line) |
+| `\` | the CPT's `|` / `\` key |
+| numeric keypad 0–9 `.` `-` | the CPT keypad |
+
+On the special-key panel, IN, OUT, PRINT, CHAR, WORD, LINE, PARA, PAGE, HOLD, MAR SET, UP,
+DOWN, SKIP, STOP, ADJ and CODE send their real key numbers. SKIP discards text after the cursor
+by the selected unit: PAGE then SKIP empties the lower screen. STOP and ADJ are mapped from the
+key column pattern and haven't been checked on the real screen yet. UP and DOWN move by the selected unit. UP moves the
+text up (on through the document) and DOWN moves it down: CODE + IN and Enter build the table
+of contents in the upper screen, then PAGE, DOWN scrolls it all into the lower screen. The other keys are not yet identified on the real
+system, and their tooltips say so.
+
+To open a document, press IN, type its name and press Enter, e.g. `rc-l1` (a letter) or
+`hm-m1.2` (a memo). Then press ↓ and ↑ to move through it.
+
+**Drives.** Disks go in and out of either drive at any time. Once the system has booted, the
+program disk can come out of drive 1 and the system keeps running. A disk the system wrote to
+is offered as a download when it is ejected.
+
+**POWER and RESET** (under the special keys).
+- **POWER off** stops the machine and leaves the screen dark. The disks stay in their drives,
+  and a disk can still be inserted while the power is off.
+- **POWER on** and **RESET** boot a fresh system from the disk in drive 1. If drive 1 is
+  empty, the screen stays black, waiting for a program disk, as at page load. RESET does
+  nothing with the power off.
+
+Checks without a browser, both using `disk/cpt.img` (skipped if it is missing):
+
+```sh
+node crates/cpt-wasm/web/check-real.mjs   # real-cpt.js + wasm: start-up, keys, LEGAL
+node crates/cpt-wasm/web/check-page.mjs   # cpt.js on a fake DOM: insert, start, type, eject, power
+```
+
+Exports: `cpt_real_insert(drive)`, `cpt_real_eject(drive)`, `cpt_real_start` (boot from
+drive 1: power on or reset), `cpt_real_halt` (power off), `cpt_real_running`, `cpt_real_run`,
+`cpt_real_cycles`, `cpt_real_settled_cycles`, `cpt_real_screen` (with `cpt_real_codes_ptr`,
+`cpt_real_attrs_ptr`, `cpt_real_cols`, `cpt_real_max_rows`), `cpt_real_key`,
+`cpt_real_key_for_char`, `cpt_real_drive_state`, `cpt_real_disk_bytes`. While no system is
+running, the disks wait in their drives inside the module.
+
+## Speaker (the earlier demo)
+
+The earlier demo machine played a melody through the Web Audio API: latching **CODE** and
+pressing **WORDPAK** started it. The page no longer runs the demo, so this is gone from the
+page. The real system's speaker isn't modelled yet (8253 counter 0 was seen being programmed
+when a document opened, probably a beep). The demo's audio path is still in the module and
+checked by `check-audio.mjs`.
 
 How it works:
 - `cpt_run_frame` leaves the frame's speaker events in a buffer of f64 pairs (CPU cycle,
@@ -65,11 +148,9 @@ How it works:
 - `node crates/cpt-wasm/web/check-audio.mjs` checks the scheduling (against a mock audio
   context) and the real wasm melody end to end, with no browser.
 
-Confirmed working in a real browser (CODE + WORDPAK plays the melody).
+This worked in a real browser when the page ran the demo.
 
 ## Notes
 
 - Glyphs are drawn with a monospaced web font for now; the authentic CPT character-ROM font is
   a `[VERIFY]` item awaiting a ROM dump and drops in as the glyph source later.
-- This is a display proof; keyboard input and the full React UI come later. The React app will
-  consume the same exports.

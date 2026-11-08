@@ -1,0 +1,100 @@
+// Node check: boot the real CPT program disk in the wasm module through real-cpt.js (the same
+// code the page uses), run the turbo start-up, open the LEGAL document with PC key codes, and
+// check the decoded screen. Needs the disk image: python tools/td0.py
+// .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img (skipped if it is missing).
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import assert from "node:assert/strict";
+
+const require = createRequire(import.meta.url);
+const { RealCpt, CPT_KEY } = require("./real-cpt.js");
+
+const imagePath = new URL("../../../disk/cpt.img", import.meta.url);
+if (!existsSync(imagePath)) {
+  console.log("skipping: disk/cpt.img not found (run tools/td0.py --raw)");
+  process.exit(0);
+}
+
+const wasm = await readFile(new URL("./cpt_wasm.wasm", import.meta.url));
+const { instance } = await WebAssembly.instantiate(wasm, {});
+const w = instance.exports;
+const real = new RealCpt(w);
+
+// Not a CPT disk: refused.
+assert.equal(real.boot(new Uint8Array(1000)), false, "a wrong-size image is refused");
+assert.equal(real.running, false);
+
+const image = new Uint8Array(await readFile(imagePath));
+assert.equal(image.length, w.cpt_real_disk_bytes());
+assert.equal(real.boot(image), true, "boots the program disk");
+
+// Turbo start-up, frame by frame, as the page does it.
+const t0 = performance.now();
+let frames = 0;
+while (!real.settled) {
+  real.frame();
+  frames++;
+}
+const secs = (performance.now() - t0) / 1000;
+console.log(`start-up: ${(real.cycles / 2e6).toFixed(1)} s emulated in ${secs.toFixed(2)} s (${frames} frames)`);
+
+let rows = real.screenText();
+assert.equal(rows.length, 47, "the editing screen has 47 rows (the status is in the title line)");
+assert.ok(rows[0].includes(" 1    0"), `status at the title's right end: ${rows[0]}`);
+assert.ok(rows[46].startsWith("^...:....|....:....|"), `ruler: ${rows[46]}`);
+const s = real.screen();
+assert.ok(s.attrs[46 * s.cols] & 2, "the ruler is white on black");
+
+// Type IN, "legal", RETURN with PC key codes, at a typist's pace in emulated time.
+function tap(key) {
+  real.press(key);
+  real.runCycles(40_000);
+  real.release(key);
+  real.runCycles(120_000);
+}
+tap(CPT_KEY.IN);
+for (const code of ["KeyL", "KeyE", "KeyG", "KeyA", "KeyL"]) {
+  const k = real.keyForPcCode(code);
+  assert.ok(k !== null, `a CPT key for ${code}`);
+  tap(k);
+}
+tap(real.keyForPcCode("Enter"));
+real.runCycles(20_000_000);
+
+rows = real.screenText();
+console.log("rows 1, 46, 48:");
+for (const r of [0, 45, 47]) console.log(`  ${String(r + 1).padStart(2)} |${rows[r]}`);
+assert.ok(rows[0].startsWith("IN         1 LEGAL"), rows[0]);
+assert.ok(rows[45].startsWith("T.017-5  REV (G-1-1)    USA LEGAL"), rows[45]);
+assert.ok(rows[47].startsWith("1   20  22  23"), rows[47]);
+assert.equal(real.keyForPcCode("ArrowDown"), CPT_KEY.DOWN);
+assert.equal(real.keyForPcCode("ArrowUp"), CPT_KEY.UP);
+assert.equal(real.drive(0).loaded, true);
+assert.equal(real.drive(1).loaded, false);
+
+// Shift is a real key: a held SHIFT gives capitals.
+assert.equal(real.keyForPcCode("ShiftLeft"), CPT_KEY.SHIFT);
+assert.equal(real.keyForPcCode("Digit1"), 0x66);
+assert.equal(real.keyForPcCode("BracketLeft"), null, "no [ key on the CPT");
+
+// The program disk can come out once booted: the system keeps running.
+const out = real.eject(0);
+assert.equal(out.length, image.length, "ejecting drive 1 returns its image");
+assert.equal(real.drive(0).loaded, false);
+real.runCycles(4_000_000);
+assert.equal(real.running, true, "the system runs on without its program disk");
+assert.ok(real.screenText()[46].startsWith("^...:....|"), "and keeps its screen");
+
+// Power off (halt) keeps the disks in their drives; start boots from drive 1, or waits.
+real.insert(1, image);
+real.halt();
+assert.equal(real.running, false);
+assert.equal(real.drive(1).loaded, true, "drive 2's disk stays in while the power is off");
+assert.equal(real.start(), false, "no disk in drive 1: waits");
+assert.equal(real.running, false);
+real.insert(0, image);
+assert.equal(real.start(), true, "boots from drive 1");
+assert.equal(real.drive(1).loaded, true, "drive 2's disk is still in after the boot");
+assert.equal(real.cycles < 1_000_000, true, "a fresh boot");
+console.log("real system checks OK");

@@ -100,28 +100,30 @@ fn last_row<'a>(out: &'a str, prefix: &str) -> &'a str {
 
 /// Once the system has started (about 35 s in: the loader's 600 reads at 20 ms each, then the
 /// system's own interrupt-driven reads), it settles on its editing screen. That screen has a
-/// top message line, 44 text rows, the typing line (row 46), the ruler with margins at columns
-/// 1 and 80 and the cursor marker at column 1, and the status row (column 1, line 0). The
-/// screen ends at the B1 mark. Getting here needs the floppy interrupt (RST 3) and the drive
-/// Not Ready probe; without them the system halts on error 1 at 15C1H.
+/// title line with the status (column 1, line 0) at its right end, 44 text rows, the typing
+/// line (row 46), and the ruler with margins at columns 1 and 80 and the cursor marker at
+/// column 1. The title line and ruler are white on black throughout. The screen ends at the B1
+/// mark. Getting here needs the floppy interrupt (RST 3) and the drive Not Ready probe; without
+/// them the system halts on error 1 at 15C1H.
 #[test]
 fn the_started_system_shows_its_editing_screen() {
     let Some(img) = image() else { return };
     let out = boot_with(&img, "80000000", &[]);
-    assert!(out.contains("screen from the display list at 7FF8H (48 rows)"), "{}", out);
+    assert!(out.contains("screen from the display list at 7FF8H (47 rows)"), "{}", out);
     let ruler = last_row(&out, "  47 |");
     assert!(ruler.starts_with("  47 |^...:....|....:....|"), "ruler, cursor at column 1: {}", ruler);
     assert!(ruler.ends_with("....:....M| white on black"), "right margin at column 80, reversed: {}", ruler);
-    let status = last_row(&out, "  48 |");
-    assert!(status.contains(" 1    0 "), "status row: {}", status);
+    let title = last_row(&out, "   1 |");
+    assert!(title.contains(" 1    0 "), "the status at the title's right end: {}", title);
+    assert!(title.ends_with("| white on black"), "no black-on-white cells in the title line: {}", title);
     assert!(out.contains("ended at: end mark at"), "{}", out);
 }
 
 /// Keys typed through the real keyboard path: each key goes out as a make/break event on
 /// 01H/02H, the RST 2 handler puts it in the ring at 058BH, the editor's task translates it with
 /// the table at DEFFH (block 2), and the text appears on the typing line. RETURN (key 14H)
-/// moves "Hello" up a line. The status row then shows column 6, line 1, and the ruler's cursor
-/// marker follows the column.
+/// moves "Hello" up a line. The status (at the title's right end) then shows column 7, line 1,
+/// and the ruler's cursor marker follows the column.
 #[test]
 fn typing_shows_text_on_the_typing_line() {
     let Some(img) = image() else { return };
@@ -131,10 +133,11 @@ fn typing_shows_text_on_the_typing_line() {
     assert!(last_row(&out, "  45 |").starts_with("  45 |Hello   "), "{}", out);
     assert!(last_row(&out, "  46 |").starts_with("  46 |World!   "), "{}", out);
     assert!(last_row(&out, "  47 |").starts_with("  47 |M...:.^..|"), "cursor marker at column 7:\n{}", out);
-    let status = last_row(&out, "  48 |");
-    assert!(status.contains(" 7    1 "), "status row (column 7, line 1): {}", status);
-    // The title, ruler and status rows are white on black; text and the typing line are not.
-    assert!(out.contains("white on black (rows): 1, 47, 48"), "{}", out);
+    let title = last_row(&out, "   1 |");
+    assert!(title.contains(" 7    1 "), "status (column 7, line 1): {}", title);
+    // The title line, the empty filler rows above the typed text (2-44) and the ruler are
+    // white on black; the text and the typing line are not.
+    assert!(out.contains("white on black (rows): 1-44, 47\n"), "{}", out);
     assert!(last_row(&out, "  47 |").ends_with("| white on black"), "the whole ruler is reversed");
     assert!(last_row(&out, "  46 |").ends_with('|'), "the typing line is black on white");
 }
@@ -145,14 +148,14 @@ fn typing_shows_text_on_the_typing_line() {
 fn command_keys_show_their_prompts() {
     let Some(img) = image() else { return };
     let out = boot_with(&img, "100000000", &["--keys", "Hello{2E}", "--keys-at", "80000000"]);
-    assert!(last_row(&out, "  48 |").contains("WORD"), "{}", out);
+    assert!(last_row(&out, "   1 |").contains("WORD"), "{}", out);
     let out = boot_with(&img, "100000000", &["--keys", "Hello{2D}world", "--keys-at", "80000000"]);
     assert!(last_row(&out, "   1 |").starts_with("   1 |OUT        1 WORLD"), "{}", out);
 }
 
 /// IN, a document name and RETURN open a document from the disk through the system's own
 /// filer. LEGAL is a print-wheel table: its first line goes on the typing line (row 46) and
-/// the following lines below the ruler and status rows. The filer reads its four blocks at
+/// the following lines below the ruler. The filer reads its four blocks at
 /// track 48, physical sectors 0, 3, 6 and 9 (logical 0-3 with the skew of 3), and the screen
 /// matches those sectors byte for byte.
 #[test]
@@ -161,16 +164,16 @@ fn in_opens_a_document_from_the_disk() {
     let out = boot_with(&img, "110000000", &["--keys", "{3D}legal{14}", "--keys-at", "80000000"]);
     assert!(last_row(&out, "   1 |").starts_with("   1 |IN         1 LEGAL"), "{}", out);
     assert!(last_row(&out, "  46 |").starts_with("  46 |T.017-5  REV (G-1-1)    USA LEGAL           03/31/81  LEGAL"), "{}", out);
-    assert!(last_row(&out, "  49 |").starts_with("  49 |1   20  22  23  24  25  26  229 8   9"), "{}", out);
+    assert!(last_row(&out, "  48 |").starts_with("  48 |1   20  22  23  24  25  26  229 8   9"), "{}", out);
     let reads = out.lines().find(|l| l.contains("after the keys started")).expect("read list");
     assert!(reads.contains("(4): t48s0(768) t48s3(771) t48s6(774) t48s9(777)"), "{}", reads);
 }
 
-/// Line-down (key 0FH) moves through an open document: the letter RC-L1 scrolls up past the
+/// UP (key 0FH) moves through an open document: the letter RC-L1 scrolls up past the
 /// typing line, its own format line (margins at 1 and 60, white on black) goes above, and the
 /// main ruler takes the document's margins.
 #[test]
-fn line_down_scrolls_through_a_letter() {
+fn up_scrolls_through_a_letter() {
     let Some(img) = image() else { return };
     let keys = format!("{{3D}}rc-l1{{14}}{{ms 8000}}{}", "{0F}{ms 300}".repeat(14));
     let out = boot_with(&img, "150000000", &["--keys", &keys, "--keys-at", "80000000"]);
@@ -178,8 +181,67 @@ fn line_down_scrolls_through_a_letter() {
     assert!(last_row(&out, "  33 |").starts_with("  33 |M...:....|") && last_row(&out, "  33 |").ends_with("white on black"),
         "the letter's format line:\n{}", out);
     assert!(last_row(&out, "  45 |").starts_with("  45 |Dear Carl:"), "{}", out);
-    assert!(last_row(&out, "  49 |").starts_with("  49 |Since July 13, 1987, you began calling in sick on the"), "{}", out);
-    assert!(last_row(&out, "  48 |").contains(" 1   14 "), "line 14: {}", last_row(&out, "  48 |"));
+    assert!(last_row(&out, "  48 |").starts_with("  48 |Since July 13, 1987, you began calling in sick on the"), "{}", out);
+    assert!(last_row(&out, "   1 |").contains(" 1   14 "), "line 14: {}", last_row(&out, "   1 |"));
     assert!(last_row(&out, "  47 |").starts_with("  47 |^...:....|....:....|....:....|....:....|....:....|....:....M"),
         "the ruler takes the letter's right margin (60): {}", last_row(&out, "  47 |"));
+}
+
+/// UP (key 0FH) and DOWN (key 1FH) move by the selected unit; with no unit, by a line. UP moves
+/// the text up (on through the document), DOWN moves it down (back toward the start). In the
+/// letter, five UPs and one DOWN leave line 4, and PAGE then UP goes to the end of the page
+/// (line 79).
+#[test]
+fn up_and_down_move_by_the_selected_unit() {
+    let Some(img) = image() else { return };
+    let keys = format!("{{3D}}rc-l1{{14}}{{ms 8000}}{}{{1F}}{{ms 800}}", "{0F}{ms 300}".repeat(5));
+    let out = boot_with(&img, "125000000", &["--keys", &keys, "--keys-at", "80000000"]);
+    assert!(last_row(&out, "   1 |").contains(" 1    4 "), "DOWN: back to line 4: {}", last_row(&out, "   1 |"));
+    let out = boot_with(&img, "130000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{5F}{ms 300}{0F}", "--keys-at", "80000000"]);
+    let title = last_row(&out, "   1 |");
+    assert!(title.contains(" 1   79  PAGE "), "PAGE then UP: line 79: {}", title);
+}
+
+/// The user's check: CODE + IN, then RETURN, builds the table of contents and scrolls it into
+/// the upper screen (the cursor at its end, line 33). PAGE then DOWN scrolls the upper screen
+/// completely into the lower screen: back to line 0, and the TOC's start in the 7 rows below
+/// the ruler. The screen is 54 rows (the system's layout: 45 rows through the typing line and
+/// 7 below the ruler), even though the display list holds more of the TOC after them.
+#[test]
+fn page_down_scrolls_the_upper_screen_into_the_lower() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "120000000", &["--keys", "{+77}{3D}{-77}{14}{ms 10000}{5F}{ms 500}{1F}{ms 8000}",
+        "--keys-at", "80000000", "--screen-at", "100000000"]);
+    // Before PAGE, DOWN (the snapshot at 100M cycles): the TOC above the typing line.
+    let start = out.find("=== at").expect("the snapshot");
+    let end = out[start..].find("\nran ").map_or(out.len(), |j| start + j);
+    let before = &out[start..end];
+    assert!(before.contains("  16 |                            TABLE OF CONTENTS"), "TOC above:\n{}", before);
+    assert!(before.contains(" 1   33 "), "cursor at the TOC's end (line 33):\n{}", before);
+    // After: line 0, the TOC below the ruler, rows down to 80.
+    let title = last_row(&out, "   1 |");
+    assert!(title.starts_with("   1 |CONTENTS   1") && title.contains(" 1    0  PAGE "), "{}", title);
+    assert!(last_row(&out, "  50 |").starts_with("  50 |                            TABLE OF CONTENTS"), "{}", out);
+    assert!(last_row(&out, "  53 |").starts_with("  53 |D-PAGE 8100/8515/8525"), "{}", out);
+    assert!(out.contains("screen from the display list at 7FF8H (54 rows)"), "the screen is 54 rows:\n{}", out);
+    assert!(!out.contains("  55 |"), "no rows past 54:\n{}", out);
+    // With the whole page below, the upper screen is empty white-on-black lines (rows 2-45);
+    // the typing line (46) stays black on white.
+    assert!(last_row(&out, "   2 |").starts_with("   2 | (44 empty rows, white on black)"), "{}", out);
+    assert!(out.contains("white on black (rows): 1-45, 47\n"), "{}", out);
+}
+
+/// SKIP (key 2FH) discards text after the cursor by the selected unit. In the letter, PAGE then
+/// SKIP sends the whole lower screen to the bit bucket: the display list then ends at the
+/// ruler, leaving rows 48-54 empty (white). LINE then SKIP discards one line (the letter's
+/// format line), and the rest moves up.
+#[test]
+fn skip_discards_the_lower_screen_by_unit() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "115000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{5F}{ms 400}{2F}{ms 4000}", "--keys-at", "80000000"]);
+    assert!(out.contains("screen from the display list at 7FF8H (47 rows)"), "nothing below the ruler:\n{}", out);
+    assert!(!out.contains("August 19, 1987"), "the lower text is gone:\n{}", out);
+    assert!(last_row(&out, "   1 |").contains(" 1    0  PAGE "), "{}", last_row(&out, "   1 |"));
+    let out = boot_with(&img, "115000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{7E}{ms 400}{2F}{ms 4000}", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "  48 |").starts_with("  48 |August 19, 1987"), "LINE, SKIP: the format line is gone:\n{}", out);
 }

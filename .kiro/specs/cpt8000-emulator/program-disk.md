@@ -304,20 +304,30 @@ screen.
 | `C4` | 0 | the cursor: the next character is the opposite of its row (black on white in a white-on-black row) | blink at 93C0H swaps a slot B0↔C4 every 25 ticks |
 | `C5`–`CF` | 0 | unknown; C6, C7, CA are built by the line copier at 8820H (block 1) | not yet traced |
 
-**Reverse video [user's memory, with a HYPOTHESIS for how it is coded].** The screen is black
-on white. The user remembers the title row, the ruler and the status row as white on black,
-and the document text and the typing line (the row just above the ruler) as black on white.
-The display data has no row or region code that marks those rows. Two things in the data do
-fit them:
-- The title and status rows put a `B0` slot before every character, and text rows have none.
-  So `B0` = "next character white on black".
-- The ruler is made only of glyphs 80H–87H, so the character ROM draws those glyphs inverse.
+**Reverse video and the status [user's memory, with a HYPOTHESIS for how it is coded].** The
+screen is black on white. The user remembers:
+- the title line and the ruler as white on black, with no black-on-white cells in the title
+  line;
+- the status (column, line, unit) at the right end of the title line, not as a row of its
+  own;
+- the document text and the typing line (the row just above the ruler) as black on white.
 
-With that rule a few cells come out black on white inside the reversed rows:
-- In the title row: column 40 (where the copyright message's `[` sat) and the last two
-  columns.
-- In the status row: the column and line numbers (columns 64–67 and 69–72), which would be
-  small black-on-white boxes [VERIFY with a photo or a memory of the screen].
+The display data has no row or region code for these. Three things in the data do fit:
+- The title and status rows put a `B0` slot before most characters, and text rows have none.
+  So a row with any `B0` is white on black from edge to edge. That includes the cells
+  without a slot: the title's column 40 and last two columns, and the status row's numbers.
+  An earlier rule (`B0` = only the next character) left those black on white, and the user
+  confirmed that was wrong.
+- The ruler is made only of glyphs 80H–87H, so the character ROM draws those glyphs inverse.
+- The status row is the optional row behind the `C3` switch. Its characters fall at columns
+  64–80, the title line's right end. How the hardware puts it there is unknown; the decoder
+  merges it into the title row.
+- **Rows with no document text are empty black lines.** For example, the rows above the
+  start of the document, which fill the whole upper screen after PAGE, DOWN. They are bare
+  `C0 0D` filler rows. Document lines, blank ones included, are separate buffers reached by a
+  link and have no `C0` (only a document's first line keeps the `C0` from its header). So
+  a bare `C0 0D` row is drawn white on black. The exception is the typing line (the row
+  above the ruler), which stays black on white even when it is empty.
 
 The character ROM is not on the disk. The glyph shapes for 80H–AFH (ruler ticks, tab marks,
 the return mark 8DH?) are unknown and drawn with ASCII look-alikes.
@@ -371,7 +381,27 @@ Key numbers, from the table and a sweep that typed each function key into the ru
 | 6AH, 6BH, 6CH | E4H, E2H, E3H | keypad `.` `,` `-` |
 | 5CH | E1H | deletes the next character and shows `.00` on the top line [VERIFY] |
 | 2FH | B0H | removes the typed word from the typing line [VERIFY] |
-| 01 02 05 0D 0F 1C 1F 3F 4C 6F 76 7F | B3 A8 B2 BD A5 E5 A6 A4 E0 FE BA B1 | nothing visible when typed alone (chords with CODE not yet tried) |
+| 0FH | A5H | **UP**, by the selected unit: the text moves up (on through the document) |
+| 1FH | A6H | **DOWN**, by the selected unit: the text moves down (the upper screen into the lower) |
+| 2FH | B0H | **SKIP**, by the selected unit: discards text after the cursor. PAGE then SKIP empties the lower screen (the display list then ends at the ruler); LINE then SKIP drops one line |
+| 3FH | A4H | **STOP** [HYPOTHESIS: same key column; the keyboard interrupt handler treats it specially] |
+| 7FH | B1H | **ADJ** [HYPOTHESIS: same key column; it rejoined lines and left the typing line blank] |
+| 01 02 05 0D 1C 4C 6F 76 | B3 A8 B2 BD E5 E0 FE BA | nothing visible when typed alone (chords with CODE not yet tried) |
+
+The special keys' numbers follow the keypad's columns: the keys in one column share the low
+digit. IN, OUT and PRINT are 3DH, 2DH and 7DH. STOP, SKIP, ADJ, UP and DOWN are 3FH, 2FH, 7FH,
+0FH and 1FH. By that pattern WORDPAK would be 0DH [HYPOTHESIS; not mapped].
+
+**The system checks disk timing too [CONFIRMED by running it].** It isn't only the loader.
+With every read after the first 32 shortened, the start-up marquee changes from the copyright
+notice ("CPT® WORD PROCESSING SOFTWARE. COPYRIGHT© 1983 BY CPT CORPORATION. ALL RIGHTS
+STRICTLY RESERVED.") to "THE DISK IN STATION 2 SEEMS TO BE FAULTY." Reads of 2,000, 4,000,
+10,000 and 20,000 cycles all give the message; 32,000 passes.
+- **Why:** a real 8-inch disk at 360 rpm takes about 31 ms between consecutive logical
+  sectors in the skew-3 order, and the software expects that.
+- **Consequence:** start-up can't be sped up with faster reads. The browser runs the
+  emulation faster than real time instead.
+- **Glyphs:** the marquee shows `8B` = ® and `8C` = ©.
 
 **Modelled timing [HYPOTHESIS]:** one event is latched at a time, and the next comes 1 ms
 (2,000 cycles) after the previous one is read. The real keyboard link's timing is unknown.
@@ -398,8 +428,22 @@ lines before it fill the rows above, and the next 7 lines go below the ruler and
 (rows 49–55). So the typing line is mid-screen, with text both above and below.
 - **Below the status row:** the rows are built from 16-byte cells at 7E00H–7FFFH, chained
   by `C2` links and padded with `B2`.
-- **Line-down** (key 0FH) moves one line through the document. Key 7FH moved two lines and
-  left the typing line blank [VERIFY].
+- **UP** (key 0FH) and **DOWN** (key 1FH) move through the document by the selected unit
+  (CHAR, WORD, LINE, PARA, PAGE), or by one line with no unit selected. The names are the
+  user's:
+  - UP moves the text up, on through the document. PAGE then UP goes to the end of the
+    page (line 79 in RC-L1).
+  - DOWN moves the text down. After CODE + IN and RETURN the table of contents fills the
+    upper screen; PAGE then DOWN scrolls it completely into the lower screen, back to line 0.
+  - Key 7FH moved two lines and left the typing line blank [VERIFY].
+- **The screen is 54 rows [CONFIRMED from the system's variables].** That's the title line,
+  45 rows through the typing line (04ABH = 45), the ruler, and 7 rows below it (04ACH = 7).
+  Before the system sets up its layout these hold 55 and 1. The display list can hold more
+  rows of text after the 7 below the ruler (the TOC's ran to row 80), but they aren't on the
+  screen. An earlier 80-row limit showed them, and the user saw a lower half with far too
+  many lines.
+- **CODE + IN** (no name) builds a table of contents document, CONTENTS: one line per
+  document with its first line and name ("LETTER TO CARL WALES . . RC-L1").
 - **The ruler** takes the format of the current line: in RC-L1 the right margin moves to 60.
 - **The letter's format line** is a ruler stored in the document, starting with `B3`, and is
   shown white on black.
@@ -454,4 +498,6 @@ disk/boot-mem.bin`.
    rest of the port map (keyboard, display, serial, timer, speaker) and the interrupt vectors,
    then update the placeholders in `MachineConfig`.
 6. Decode the keyboard code tables.
-7. Show the decoded screen in the web UI.
+7. ~~Show the decoded screen in the web UI~~ (done: insert the image in drive 1; see
+   `crates/cpt-wasm/README.md`). Open: accepting the `.td0` directly in the page, and the
+   speaker (8253 counter 0 was programmed to 1500 when a document opened; probably a beep).

@@ -130,6 +130,21 @@ impl CptFloppy {
         self.drives[drive & 3].as_ref()
     }
 
+    /// Take the disk out of `drive`, if there is one.
+    pub fn eject(&mut self, drive: usize) -> Option<DiskImage> {
+        self.drives[drive & 3].take()
+    }
+
+    /// A sector transfer is in progress (for a drive activity light).
+    pub fn busy(&self) -> bool {
+        self.busy_left.is_some()
+    }
+
+    /// The selected drive (0-3).
+    pub fn selected_drive(&self) -> usize {
+        self.drive()
+    }
+
     /// The selected drive. The system probes selects 0-3 (routine 0C74H), so the latch holds
     /// a drive number in bits 0-1 [VERIFY other bits].
     fn drive(&self) -> usize {

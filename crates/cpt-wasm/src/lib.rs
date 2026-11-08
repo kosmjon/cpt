@@ -415,3 +415,223 @@ pub extern "C" fn cpt_disk_active(station: u32) -> u32 {
             .unwrap_or(0)
     })
 }
+
+// --- the real CPT system, booted from a real program disk ---
+//
+// Separate from the demo machine above (which the page no longer runs). The workstation has
+// two drives. While no system is running (before the first boot, or with the power off), the
+// disks wait in PARKED; once a system runs, they are in its floppy controller.
+//
+// - `cpt_real_insert(drive)` puts the transfer-buffer image (77 x 16 x 256 = 315,392 bytes,
+//   e.g. from tools/td0.py --raw) in drive 0 or 1; `cpt_real_eject(drive)` takes it out.
+//   Disks can go in and out while the system runs (the program disk can come out once it
+//   has booted).
+// - `cpt_real_start()` boots a fresh system from the disk in drive 1 (power on, or reset);
+//   `cpt_real_halt()` stops it and leaves the disks in their drives (power off).
+//
+// The page runs the system faster than real time until it has settled
+// (`cpt_real_settled_cycles`), then in real time. The screen is decoded from the display list
+// (`cpt_machine::cpt_display`) into two buffers of REAL_ROWS x REAL_COLS bytes: character
+// codes, and attributes (bit 0 = a cell is there, bit 1 = white on black).
+
+use cpt_machine::cpt_display::WINDOW_COLS as REAL_COLS;
+use cpt_machine::CptSystem;
+
+/// Rows the screen buffers hold: the real screen's 54 (the title line, 45 rows through the
+/// typing line, the ruler and 7 below).
+const REAL_ROWS: usize = cpt_machine::cpt_display::SCREEN_ROWS;
+
+thread_local! {
+    static REAL: RefCell<Option<CptSystem>> = const { RefCell::new(None) };
+    /// The disks in drives 1 and 2 while no system is running.
+    static PARKED: RefCell<[Option<DiskImage>; 2]> = const { RefCell::new([None, None]) };
+    static REAL_CODES: RefCell<Vec<u8>> = RefCell::new(vec![0u8; REAL_ROWS * REAL_COLS]);
+    static REAL_ATTRS: RefCell<Vec<u8>> = RefCell::new(vec![0u8; REAL_ROWS * REAL_COLS]);
+}
+
+/// Size of a CPT program disk image in bytes.
+#[no_mangle]
+pub extern "C" fn cpt_real_disk_bytes() -> usize {
+    cpt_machine::cpt_floppy::cpt_geometry().total_bytes()
+}
+
+/// Put the transfer-buffer image in `drive` (0 = drive 1, 1 = drive 2), replacing any disk
+/// there. Returns 1 on success, 0 if the bytes are not a CPT disk image.
+#[no_mangle]
+pub extern "C" fn cpt_real_insert(drive: u32) -> u32 {
+    let bytes = XFER.with(|x| x.borrow().clone());
+    let geom = cpt_machine::cpt_floppy::cpt_geometry();
+    if bytes.len() != geom.total_bytes() {
+        return 0;
+    }
+    let mut img = DiskImage::blank(geom);
+    img.load_bytes(&bytes);
+    let d = drive as usize & 1;
+    REAL.with(|r| match r.borrow_mut().as_mut() {
+        Some(sys) => sys.floppy().mount(d, img),
+        None => PARKED.with(|p| p.borrow_mut()[d] = Some(img)),
+    });
+    1
+}
+
+/// Take the disk out of `drive`; its bytes go to the transfer buffer. Returns the length, or 0
+/// if the drive was empty. The system (if running) carries on without it.
+#[no_mangle]
+pub extern "C" fn cpt_real_eject(drive: u32) -> usize {
+    let d = drive as usize & 1;
+    let img = REAL.with(|r| match r.borrow_mut().as_mut() {
+        Some(sys) => sys.floppy().eject(d),
+        None => PARKED.with(|p| p.borrow_mut()[d].take()),
+    });
+    match img {
+        Some(img) => {
+            let bytes = img.bytes().to_vec();
+            let len = bytes.len();
+            XFER.with(|x| *x.borrow_mut() = bytes);
+            len
+        }
+        None => 0,
+    }
+}
+
+/// Stop the system (power off, or the first half of a reset). The disks stay in their drives.
+#[no_mangle]
+pub extern "C" fn cpt_real_halt() {
+    REAL.with(|r| {
+        if let Some(mut sys) = r.borrow_mut().take() {
+            let disks = sys.take_disks();
+            PARKED.with(|p| *p.borrow_mut() = disks);
+        }
+    });
+}
+
+/// Boot a fresh system from the disk in drive 1 (power on, or reset). Any running system is
+/// stopped first. Returns 1 if it booted, 0 if drive 1 is empty (the screen stays dark,
+/// waiting for a program disk).
+#[no_mangle]
+pub extern "C" fn cpt_real_start() -> u32 {
+    cpt_real_halt();
+    PARKED.with(|p| {
+        let mut p = p.borrow_mut();
+        let Some(disk) = p[0].take() else { return 0 };
+        let mut sys = CptSystem::boot_disk(disk, cpt_machine::cpt_system::READ_DELAY_CYCLES);
+        if let Some(second) = p[1].take() {
+            sys.floppy().mount(1, second);
+        }
+        REAL.with(|r| *r.borrow_mut() = Some(sys));
+        1
+    })
+}
+
+/// 1 if the real system is running.
+#[no_mangle]
+pub extern "C" fn cpt_real_running() -> u32 {
+    REAL.with(|r| r.borrow().is_some() as u32)
+}
+
+/// Run the real system for about `cycles` CPU cycles.
+#[no_mangle]
+pub extern "C" fn cpt_real_run(cycles: f64) {
+    REAL.with(|r| {
+        if let Some(sys) = r.borrow_mut().as_mut() {
+            sys.exec.run_cycles(cycles.max(0.0) as u64);
+        }
+    });
+}
+
+/// CPU cycles the real system has run.
+#[no_mangle]
+pub extern "C" fn cpt_real_cycles() -> f64 {
+    REAL.with(|r| r.borrow().as_ref().map(|s| s.exec.cpu.cycles as f64).unwrap_or(0.0))
+}
+
+/// Cycles after which the started system has settled and takes keys.
+#[no_mangle]
+pub extern "C" fn cpt_real_settled_cycles() -> f64 {
+    cpt_machine::cpt_system::SETTLED_CYCLES as f64
+}
+
+/// Decode the current screen into the code/attribute buffers. Returns the number of rows.
+#[no_mangle]
+pub extern "C" fn cpt_real_screen() -> usize {
+    REAL.with(|r| {
+        let mut rref = r.borrow_mut();
+        let Some(sys) = rref.as_mut() else { return 0 };
+        let screen = sys.screen(REAL_ROWS);
+        REAL_CODES.with(|c| {
+            REAL_ATTRS.with(|a| {
+                let (mut c, mut a) = (c.borrow_mut(), a.borrow_mut());
+                c.fill(0);
+                a.fill(0);
+                for (ri, row) in screen.rows.iter().enumerate().take(REAL_ROWS) {
+                    for (ci, cell) in row.iter().enumerate().take(REAL_COLS) {
+                        c[ri * REAL_COLS + ci] = cell.code;
+                        a[ri * REAL_COLS + ci] = 1 | (cell.reverse as u8) << 1;
+                    }
+                }
+            })
+        });
+        screen.rows.len().min(REAL_ROWS)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_codes_ptr() -> *const u8 {
+    REAL_CODES.with(|c| c.borrow().as_ptr())
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_attrs_ptr() -> *const u8 {
+    REAL_ATTRS.with(|a| a.borrow().as_ptr())
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_cols() -> usize {
+    REAL_COLS
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_max_rows() -> usize {
+    REAL_ROWS
+}
+
+/// Send a key event: `key` is a CPT key number (01-7F), `down` 1 = press, 0 = release.
+#[no_mangle]
+pub extern "C" fn cpt_real_key(key: u32, down: u32) {
+    REAL.with(|r| {
+        if let Some(sys) = r.borrow_mut().as_mut() {
+            let k = key as u8 & 0x7F;
+            if down != 0 { sys.keyboard().press(k) } else { sys.keyboard().release(k) }
+        }
+    });
+}
+
+/// The CPT key that types character `ch` (from the program's own key table): the key number,
+/// plus 0x100 if SHIFT is needed. -1 if no key types it.
+#[no_mangle]
+pub extern "C" fn cpt_real_key_for_char(ch: u32) -> i32 {
+    match char::from_u32(ch).and_then(cpt_machine::cpt_keyboard::key_for_char) {
+        Some((k, shift)) => k as i32 | (shift as i32) << 8,
+        None => -1,
+    }
+}
+
+/// Drive state for the UI: bit 0 = a disk is in, bit 1 = it has been written, bit 2 = it is
+/// being read or written right now. `drive` 0 = drive 1, 1 = drive 2. Works with or without a
+/// running system.
+#[no_mangle]
+pub extern "C" fn cpt_real_drive_state(drive: u32) -> u32 {
+    let d = drive as usize & 1;
+    REAL.with(|r| match r.borrow_mut().as_mut() {
+        Some(sys) => {
+            let f = sys.floppy();
+            let Some(img) = f.image(d) else { return 0 };
+            let active = f.busy() && f.selected_drive() == d;
+            1 | (img.is_modified() as u32) << 1 | (active as u32) << 2
+        }
+        None => PARKED.with(|p| match &p.borrow()[d] {
+            Some(img) => 1 | (img.is_modified() as u32) << 1,
+            None => 0,
+        }),
+    })
+}

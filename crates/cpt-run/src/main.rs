@@ -106,7 +106,7 @@ fn disasm_command(args: &[String]) -> Result<(), String> {
 /// load track 1 sector 0 (the sector with the deleted-data mark) to 0000H and run it with
 /// A = 0 and D = 0 (drive 0).
 fn cpt_boot_command(args: &[String]) -> Result<(), String> {
-    use cpt_machine::{cpt_floppy, CptFloppy, DiskImage};
+    use cpt_machine::{CptFloppy, CptSystem};
     // Named options (anywhere after the image): --keys "<script>", --keys-at <cycle>,
     // --screen-at <cycle> (repeatable). The rest are positional.
     let mut keys_script: Option<String> = None;
@@ -154,38 +154,9 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     // 32K * (1 + blocks)), for offline disassembly.
     let mem_out: Option<String> = args.get(4).cloned();
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
-    let geom = cpt_floppy::cpt_geometry();
-    if bytes.len() != geom.total_bytes() {
-        return Err(format!("{} is {} bytes; a CPT disk is {}", path, bytes.len(), geom.total_bytes()));
-    }
-    let mut image = DiskImage::blank(geom);
-    image.load_bytes(&bytes);
-
-    let cfg = MachineConfig::cpt_real();
-    let mut machine = Machine::new(cfg.clone());
-    let mut fdc = CptFloppy::new();
-    fdc.mount(0, image);
-    fdc.op_delay_cycles = op_delay;
-    let fdc_dev = machine.device_count();
-    machine.attach_device(Box::new(fdc));
-    // The 8253 timer at 1CH-1FH (counter 1 -> RST 5, counter 2 -> RST 7: a guess) and the
-    // interrupt-acknowledge port at 00H.
-    let pit_dev = machine.device_count();
-    machine.attach_device(Box::new(cpt_machine::Pit8253::cpt()));
-    let ack_dev = machine.device_count();
-    machine.attach_device(Box::new(cpt_machine::InterruptAck::new(0x00)));
-    // The display's vertical retrace on RST 6 (its handler drains the queued display-list
-    // updates). 60 Hz is a guess.
-    machine.attach_device(Box::new(cpt_machine::TimerDevice::new(33_333, 6)));
-    // The keyboard on 01H/02H, raising RST 2.
-    let kb_dev = machine.device_count();
-    machine.attach_device(Box::new(cpt_machine::CptKeyboard::new()));
-    let boot = &bytes[16 * 256..17 * 256];
-    machine.mem.load_bank0(0, boot);
-
-    let mut cpu = Cpu::new();
-    cpu.pc = 0;
-    let mut exec = Executive::new(cpu, machine);
+    let sys = CptSystem::boot(&bytes, op_delay).map_err(|e| format!("{}: {}", path, e))?;
+    let (fdc_dev, pit_dev, ack_dev, kb_dev) = (sys.fdc, sys.pit, sys.ack, sys.kb);
+    let mut exec = sys.exec;
 
     // Watch the code move between 256-byte pages: a compact trail of where execution went.
     let mut trail: Vec<(u64, u16)> = Vec::new();
@@ -371,9 +342,9 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
 /// the screen in a frame, one numbered line per row. Runs of blank rows are collapsed. On a
 /// terminal the screen is drawn in its own colours (black on white, with white-on-black rows);
 /// in plain (redirected) output white-on-black rows are tagged after the frame.
-fn print_screen(m: &mut Machine, head: u16) {
+fn print_screen(m: &mut cpt_machine::Machine, head: u16) {
     use std::io::IsTerminal;
-    let screen = cpt_machine::cpt_display::render(|a| m.read(a), head, 80);
+    let screen = cpt_machine::cpt_display::render(|a| m.read(a), head, cpt_machine::cpt_display::SCREEN_ROWS);
     let ansi = std::io::stdout().is_terminal();
     let body = if ansi { screen.to_ansi() } else { screen.to_text() };
     let width = cpt_machine::cpt_display::WINDOW_COLS;
@@ -386,6 +357,15 @@ fn print_screen(m: &mut Machine, head: u16) {
         let run = screen.rows[i..].iter().take_while(|r| r.is_empty()).count();
         if run > 2 {
             println!("     | ({} blank rows){}|", run, " ".repeat(width.saturating_sub(14 + digits(run))));
+            i += run;
+            continue;
+        }
+        // Empty white-on-black rows (filler rows with no document text).
+        let black = |r: &Vec<cpt_machine::cpt_display::Cell>| !r.is_empty() && r.iter().all(|c| c.reverse && c.code == 0x20);
+        let run = screen.rows[i..].iter().take_while(|r| black(r)).count();
+        if run > 2 {
+            let label = format!(" ({} empty rows, white on black)", run);
+            println!("{:>4} |{}{}| white on black", i + 1, label, " ".repeat(width.saturating_sub(label.len())));
             i += run;
             continue;
         }
@@ -413,7 +393,16 @@ fn print_screen(m: &mut Machine, head: u16) {
     println!("  ended at: {}", ending);
     let mut rev_rows: Vec<usize> = screen.reverse_runs().iter().map(|r| r.0 + 1).collect();
     rev_rows.dedup();
-    let rev_rows: Vec<String> = rev_rows.iter().map(|r| r.to_string()).collect();
+    // As ranges: "1, 2-45, 47".
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for r in rev_rows {
+        match ranges.last_mut() {
+            Some(last) if last.1 + 1 == r => last.1 = r,
+            _ => ranges.push((r, r)),
+        }
+    }
+    let rev_rows: Vec<String> = ranges.iter()
+        .map(|&(a, b)| if a == b { a.to_string() } else { format!("{}-{}", a, b) }).collect();
     println!("  white on black (rows): {}", if rev_rows.is_empty() { "(none)".into() } else { rev_rows.join(", ") });
     if !screen.unknown_codes.is_empty() {
         let u: Vec<String> = screen.unknown_codes.iter().map(|c| format!("{:02X}", c)).collect();

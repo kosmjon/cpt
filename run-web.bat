@@ -1,30 +1,30 @@
 @echo off
-REM Build the CPT wasm display, copy it into the web folder, and serve it locally.
-REM Run from the repo root:  run-web.bat   then open http://localhost:8080
-REM
-REM Requires: rustup target add wasm32-unknown-unknown  (one-time), and Node.js (for the server).
+rem Build the CPT wasm module, copy it next to the web page, and serve the page.
+rem Then open http://localhost:8080 in a browser. Press Ctrl+C to stop the server.
+rem
+rem Needs (once): rustup target add wasm32-unknown-unknown
+rem For the real CPT system, insert disk\cpt.img in drive 1 on the page. Make it with:
+rem   python tools\td0.py .kiro\specs\cpt8000-emulator\cpt.td0 --raw disk\cpt.img
 
-setlocal
+rem Run from the repository root (where this file is), wherever it was started from.
 cd /d "%~dp0"
 
-echo [1/3] Building cpt-wasm for wasm32-unknown-unknown (release)...
+echo Building the wasm module...
 cargo build -p cpt-wasm --target wasm32-unknown-unknown --release
 if errorlevel 1 (
-    echo.
-    echo Build failed. If the error mentions the wasm target, run:
-    echo     rustup target add wasm32-unknown-unknown
+    echo Build failed.
     exit /b 1
 )
 
-echo [2/3] Copying the wasm module into crates\cpt-wasm\web ...
-copy /Y "target\wasm32-unknown-unknown\release\cpt_wasm.wasm" "crates\cpt-wasm\web\cpt_wasm.wasm" >nul
+rem Honour CARGO_TARGET_DIR if it is set; otherwise cargo builds into target\.
+set "TARGET=target"
+if defined CARGO_TARGET_DIR set "TARGET=%CARGO_TARGET_DIR%"
+
+copy /y "%TARGET%\wasm32-unknown-unknown\release\cpt_wasm.wasm" "crates\cpt-wasm\web\" >nul
 if errorlevel 1 (
-    echo Copy failed.
+    echo Could not copy cpt_wasm.wasm from %TARGET%\wasm32-unknown-unknown\release.
     exit /b 1
 )
 
-echo [3/3] Serving on http://localhost:8080  (press Ctrl+C to stop)
-echo.
-npx --yes serve -l 8080 crates\cpt-wasm\web
-
-endlocal
+echo Serving crates\cpt-wasm\web at http://localhost:8080  (Ctrl+C to stop)
+python -m http.server --directory crates\cpt-wasm\web 8080
