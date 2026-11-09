@@ -944,9 +944,25 @@ to the formatted-but-empty disk below gives a byte-identical disk.
   (`00 01 00 18`: length 24) and the pointer `00 00 10` (logical 16).
 - Only t0s3, t0s13 and t1s2 changed. The label was already there.
 
-**Directory depth:** a one-leaf root is enough for a few pages. When it fills, the system
-must split it into an inner root (level `1`) with leaves in the data area, as the program
-disk has. That hasn't been exercised [VERIFY].
+**Directory depth: the split works** [CONFIRMED by filing 14 pages, in shuffled order, to a
+blank data disk]. A node has 11 item slots (a level byte, then 11 × 23 bytes). The root
+leaf's first slot is always empty, so it holds ten pages; the eleventh splits it:
+- The root becomes an inner node (`31`) with two items: an unnamed one pointing at the
+  **lower** leaf, and one named for the first name in the **upper** leaf, pointing at that.
+  Here: unnamed → logical 28 (`P01`–`P06`, with its own empty first slot), `P07` → logical
+  27 (`P07`–`P14`, no empty slot).
+- The two leaves are allocated right after the eleventh page's block (logical 27 and 28),
+  and pages filed later continue after them (29, 30, 31). Leaves are marked 3 in the map,
+  like page blocks. So 14 pages use logical 16–31: 14 blocks and two leaves.
+- All 14 pages list in order and read back after a fresh boot, including the last name of
+  the lower leaf and the first of the upper. A name that doesn't exist gives an empty
+  screen, not an error.
+- Each of these pages is 12 bytes (`01 P07 02 …`), field `0001000C`. The page typed before
+  OUT is not accumulated across OUTs.
+- Boot test `a_data_disk_directory_splits_when_a_leaf_fills` walks the saved directory with
+  twelve pages and checks every name and its pointer.
+
+Not yet seen: a second split (the inner root filling, 11 leaves), and deleting pages.
 
 **It persists.** Saved with `--save-disk2` and mounted again after a fresh boot, IN 2 ZZ
 brings the page back (boot test `a_blank_data_disk_takes_a_page_and_keeps_it`).

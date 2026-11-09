@@ -25,12 +25,17 @@ pub struct Cpu {
     pub sp: u16,
     pub pc: u16,
     pub flags: Flags,
-    /// Interrupt-enable flip-flop (set by EI, cleared by DI and on interrupt accept).
+    /// Interrupt-enable flip-flop (set by EI, after the instruction that follows it; cleared
+    /// by DI and on interrupt accept).
     pub int_enabled: bool,
     /// True after a HLT, until an interrupt wakes the CPU.
     pub halted: bool,
     /// Total cycles executed (for timing).
     pub cycles: u64,
+    /// An EI has executed and the instruction after it has not finished. The 8080 enables
+    /// interrupts only once that next instruction completes, so `EI; RET` at the end of an
+    /// interrupt handler can't be interrupted between the two.
+    ei_pending: bool,
 }
 
 impl Default for Cpu {
@@ -49,6 +54,7 @@ impl Default for Cpu {
             int_enabled: false,
             halted: false,
             cycles: 0,
+            ei_pending: false,
         }
     }
 }
@@ -282,14 +288,23 @@ impl Cpu {
 
     /// Execute a single instruction, returning the number of machine cycles it took.
     pub fn step(&mut self, bus: &mut dyn Bus) -> u32 {
+        // An EI just before this instruction takes effect when this instruction finishes.
+        let enable_after = std::mem::take(&mut self.ei_pending);
         if self.halted {
             // A halted CPU consumes cycles doing nothing until an interrupt.
             self.cycles += 4;
+            if enable_after {
+                self.int_enabled = true;
+            }
             return 4;
         }
         let op = self.fetch8(bus);
         let cyc = self.execute(bus, op);
         self.cycles += cyc as u64;
+        // (EI followed by DI leaves interrupts off.)
+        if enable_after && op != 0xF3 {
+            self.int_enabled = true;
+        }
         cyc
     }
 
@@ -732,7 +747,8 @@ impl Cpu {
                 4
             } // DI
             0xFB => {
-                self.int_enabled = true;
+                // Takes effect after the next instruction (see `step`).
+                self.ei_pending = true;
                 4
             } // EI
         }

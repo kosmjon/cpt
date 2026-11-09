@@ -269,6 +269,67 @@ fn blank_data_disk() -> Vec<u8> {
     img
 }
 
+/// The physical (linear) sector of a logical sector on a CPT disk: a skew of 3 within the
+/// track, shifted by 2 per track (see `tools/cptfs.py`).
+fn physical(logical: usize) -> usize {
+    let (t, s) = (logical / 16, logical % 16);
+    t * 16 + (3 * s + 2 * t) % 16
+}
+
+/// Every (name, first-block logical sector) in a CPT directory, in tree order. Nodes are a
+/// level byte ('0' leaf, '1' inner) then 11 items of 16 name + 4 field + 3 pointer bytes.
+fn directory(img: &[u8], logical: usize) -> Vec<(String, usize)> {
+    let node = &img[physical(logical) * 256..][..256];
+    let mut out = Vec::new();
+    for k in 0..11 {
+        let e = &node[1 + 23 * k..24 + 23 * k];
+        if e.iter().all(|&b| b == 0) {
+            continue;
+        }
+        let ptr = (e[20] as usize) << 16 | (e[21] as usize) << 8 | e[22] as usize;
+        if node[0] == b'0' {
+            out.push((String::from_utf8_lossy(&e[..16]).trim_end().to_string(), ptr));
+        } else if ptr != 0 {
+            out.extend(directory(img, ptr));
+        }
+    }
+    out
+}
+
+/// Filing twelve pages to a blank data disk fills the root leaf (a slot to spare for the empty
+/// first one, ten pages) and splits it: the root becomes an inner node over two leaves. Every
+/// page is still listed, in order, and its pointer leads to its own `01 NAME 02` block. The
+/// names go in shuffled so some land mid-leaf.
+#[test]
+fn a_data_disk_directory_splits_when_a_leaf_fills() {
+    let Some(img) = image() else { return };
+    let tag = std::process::id();
+    let blank = std::env::temp_dir().join(format!("cpt-split-blank-{}.img", tag));
+    let saved = std::env::temp_dir().join(format!("cpt-split-saved-{}.img", tag));
+    std::fs::write(&blank, blank_data_disk()).unwrap();
+    let order = ["p07", "p02", "p11", "p05", "p12", "p01", "p09", "p04", "p03", "p06", "p10", "p08"];
+    let keys: String = order.iter()
+        .map(|n| format!("{n}{{14}}{{ms 800}}{{2D}}{{ms 1500}}{{06}}{{06}}2{n}{{14}}{{ms 2500}}"))
+        .collect();
+    let out = boot_with(&img, "225000000", &["--disk2", blank.to_str().unwrap(), "--save-disk2", saved.to_str().unwrap(),
+        "--keys", &keys, "--keys-at", "80000000"]);
+    let bytes = std::fs::read(&saved).expect("the saved disk");
+    assert_eq!(bytes[13 * 256], b'1', "the root became an inner node:\n{}", out);
+    let dir = directory(&bytes, 15);
+    let mut want: Vec<String> = order.iter().map(|n| n.to_uppercase()).collect();
+    want.sort();
+    let names: Vec<String> = dir.iter().map(|d| d.0.clone()).collect();
+    assert_eq!(names, want, "all twelve pages, in order");
+    for (name, ptr) in &dir {
+        let blk = &bytes[physical(*ptr) * 256..];
+        assert_eq!(blk[0], 0x01, "{} header", name);
+        assert_eq!(&blk[1..1 + name.len()], name.as_bytes(), "{} points at its own block", name);
+        assert_eq!(blk[1 + name.len()], 0x02, "{} header end", name);
+    }
+    let _ = std::fs::remove_file(&blank);
+    let _ = std::fs::remove_file(&saved);
+}
+
 /// The blank data disk kept in the repository (for the web page) is exactly what the generator
 /// makes, so the two can't drift apart. Needs no program disk.
 #[test]
@@ -311,6 +372,25 @@ fn a_blank_data_disk_takes_a_page_and_keeps_it() {
     let _ = std::fs::remove_file(&saved);
 }
 
+/// `--watch` finds who touches a byte. Start-up stores the operation number at 0E71H: the
+/// module loader's DMA puts the first (zero) value there, then the instruction at 0D9CH
+/// writes it (STA 0E71H). With --watch-stop the run halts at that write.
+#[test]
+fn watch_finds_who_writes_the_operation_number() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "40000000", &["--watch", "w:0E71"]);
+    assert!(out.contains("watch w:0E71: 2 accesses"), "{}", out);
+    assert!(out.contains("65C3 write DMA x1"), "the loader's DMA: {}", out);
+    assert!(out.contains("0D9C write     x1"), "the start-up code's store: {}", out);
+    // Both a read and a write are seen when the range isn't limited; the read is at 0E23H.
+    let out = boot_with(&img, "40000000", &["--watch", "0E71"]);
+    assert!(out.contains("0E23 read      x1"), "{}", out);
+    // Stop at the first write after the DMA load.
+    let out = boot_with(&img, "40000000", &["--watch", "w:0E71", "--watch-from", "25000000", "--watch-stop"]);
+    assert!(out.contains("watch: write of 0E71 (value 00) by the instruction at 0D9C"), "{}", out);
+    assert!(out.contains("stack at "), "{}", out);
+}
+
 /// `--brk-read` stops as the read of a given sector is issued. IN RC-L1 reads the letter's
 /// first block, logical 675 (track 42, physical sector 13 with the skew), into 2800H; the
 /// three ways of naming the sector stop at the same place.
@@ -342,9 +422,10 @@ fn staple_brings_in_the_document_named_on_the_typing_line() {
 }
 
 /// TTY communications on the TTY disk: CODE + I, then the control page `CTTY`, enables them.
-/// The system sets up the 8251 at 4AH (reset 00 00 00 40, mode 4EH, command 37H), sends
-/// `{04}N` and turns its transmitter off (16H). Characters from the line interrupt on RST 1
-/// (acknowledged with 02H) and land in the receive buffer at 3200H.
+/// The system sets up the 8251 at 4AH (reset 00 00 00 40, mode 4EH, command 37H), sends an EOT
+/// (04H) and turns its transmitter off (16H). (It used to send `04 4E`: the extra byte was
+/// stack garbage, from the CPU taking interrupts between EI and RET.) Characters from the
+/// line interrupt on RST 1 (acknowledged with 02H) and land in the receive queue at 3200H.
 #[test]
 fn tty_communications_set_up_the_8251_and_receive() {
     let Some(img) = tty_image() else { return };
@@ -356,7 +437,7 @@ fn tty_communications_set_up_the_8251_and_receive() {
     // and the transmitter turned off.
     assert!(serial.contains("control writes: 4A:00 4A:00 4A:00 4A:40 4C:00 4A:4E 4A:37 "), "{}", serial);
     assert!(serial.contains("4C:09") && serial.contains("mode 4E, command 16, 4CH = 09"), "{}", serial);
-    assert!(out.contains("  sent 2 bytes: \"{04}N\""), "{}", out);
+    assert!(out.contains("  sent 1 bytes: \"{04}\""), "{}", out);
     assert!(out.contains("  received 7 bytes (0 still waiting)"), "{}", out);
     let acks = out.lines().find(|l| l.starts_with("interrupt acknowledges")).unwrap();
     assert!(acks.contains(" 02x"), "receive interrupts (RST 1) acknowledged: {}", acks);

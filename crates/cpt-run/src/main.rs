@@ -18,6 +18,7 @@
 //!           [--keys "<script>"] [--keys-at <cycle>] [--screen-at <cycle>]...
 //!           [--brk-after <cycle>] [--brk-read <t41s14|L660|670>] [--profile]
 //!           [--disk2 <img>] [--save-disk1 <out>] [--save-disk2 <out>]
+//!           [--watch [r:|w:]ADDR[-END|+LEN][@BLOCK]]... [--watch-from <cycle>] [--watch-stop]
 //!           [--serial-listen <addr> [--serial-raw]] [--serial-in "<script>"]
 //!           [--serial-in-at <cycle>] [--live]
 //!                                          Boot a real CPT program disk on the real hardware
@@ -135,6 +136,10 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mut disk2: Option<String> = None;
     let mut save_disk1: Option<String> = None;
     let mut save_disk2: Option<String> = None;
+    // Memory watchpoints: which instructions read or write these addresses.
+    let mut watch_specs: Vec<String> = Vec::new();
+    let mut watch_from: u64 = 0;
+    let mut watch_stop = false;
     let mut positional: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -148,6 +153,10 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
             "--disk2" => disk2 = Some(it.next().ok_or("--disk2 needs a disk image")?.clone()),
             "--save-disk1" => save_disk1 = Some(it.next().ok_or("--save-disk1 needs a file name")?.clone()),
             "--save-disk2" => save_disk2 = Some(it.next().ok_or("--save-disk2 needs a file name")?.clone()),
+            "--watch" => watch_specs.push(it.next().ok_or("--watch needs a range, e.g. w:3200-32FF")?.clone()),
+            "--watch-from" => watch_from = it.next().ok_or("--watch-from needs a cycle count")?
+                .parse().map_err(|_| "invalid --watch-from")?,
+            "--watch-stop" => watch_stop = true,
             "--brk-read" => brk_read = Some(parse_sector(it.next().ok_or("--brk-read needs a sector: t41s14, L660 or 656")?)?),
             "--keys" => keys_script = Some(it.next().ok_or("--keys needs a script")?.clone()),
             "--keys-at" => keys_at = it.next().ok_or("--keys-at needs a cycle count")?
@@ -215,6 +224,15 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         None => None,
     };
     let mut exec = sys.exec;
+    let watching = !watch_specs.is_empty();
+    for spec in &watch_specs {
+        exec.machine.add_watch(parse_watch(spec)?);
+    }
+    // What the watchpoints saw: totals per (instruction, read or write, CPU or DMA), and the
+    // first few accesses in order.
+    let mut watch_groups: std::collections::HashMap<(u16, bool, bool), WatchGroup> = std::collections::HashMap::new();
+    let mut watch_events: Vec<(u64, u16, cpt_machine::WatchHit)> = Vec::new();
+    let mut watch_total: u64 = 0;
     fn usart_of(m: &mut Machine, dev: usize) -> &mut cpt_machine::Usart8251 {
         m.device_mut(dev).unwrap().as_any_mut().downcast_mut().unwrap()
     }
@@ -283,8 +301,42 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
             let blk = if pc >= 0x8000 { exec.machine.selected_block() as u8 } else { 0xFF };
             *hist.entry((blk, pc & 0xFFF0)).or_insert(0) += 1;
         }
+        // Memory the report code read since the last step isn't the program's: drop it, so the
+        // hits after this step are this instruction's (and its interrupt entry's and DMA's).
+        let pc_before = exec.cpu.pc;
+        if watching {
+            exec.machine.watch_hits.clear();
+        }
         exec.step();
         let now = exec.cpu.cycles - start;
+        if watching && now >= watch_from && !exec.machine.watch_hits.is_empty() {
+            let hits = std::mem::take(&mut exec.machine.watch_hits);
+            for h in &hits {
+                watch_total += 1;
+                let g = watch_groups.entry((pc_before, h.write, h.dma)).or_default();
+                if g.count == 0 {
+                    g.lo = h.addr;
+                    g.hi = h.addr;
+                    g.first_cycle = now;
+                    g.first_val = h.value;
+                }
+                g.count += 1;
+                g.lo = g.lo.min(h.addr);
+                g.hi = g.hi.max(h.addr);
+                g.last_cycle = now;
+                g.last_val = h.value;
+                if watch_events.len() < 60 {
+                    watch_events.push((now, pc_before, *h));
+                }
+            }
+            if watch_stop {
+                let at = hits[0];
+                let what = format!("watch: {} of {:04X} (value {:02X}) by the instruction at {:04X}",
+                    if at.write { "write" } else { "read" }, at.addr, at.value, pc_before);
+                report_break(&mut exec, &what, now, &recent);
+                break;
+            }
+        }
         // --brk-read: stop as the read command for the sector is issued (OUT 24H), so the code
         // that asked for it is the one running, with its caller on the stack.
         if let Some((bt, bs)) = brk_read {
@@ -439,6 +491,30 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         println!("  sent {} bytes{}: \"{}\"", u.sent, if u.breaks > 0 { format!(" and {} break(s)", u.breaks) } else { String::new() },
             serial_text(&serial_out));
         println!("  received {} bytes ({} still waiting)", u.received, u.rx_waiting() + serial_bytes.len() - next_serial);
+    }
+
+    if watching {
+        println!("\nwatch {}: {} accesses{}", watch_specs.join(" "), watch_total,
+            if watch_from > 0 { format!(" (from cycle {})", watch_from) } else { String::new() });
+        let mut groups: Vec<_> = watch_groups.iter().collect();
+        groups.sort_by(|a, b| b.1.count.cmp(&a.1.count).then(a.0.cmp(b.0)));
+        println!("  by instruction (the address of the instruction that did it):");
+        for ((pc, write, dma), g) in groups.iter().take(24) {
+            let addrs = if g.lo == g.hi { format!("{:04X}", g.lo) } else { format!("{:04X}-{:04X}", g.lo, g.hi) };
+            let vals = if g.first_val == g.last_val { format!("{:02X}", g.first_val) }
+                else { format!("{:02X}..{:02X}", g.first_val, g.last_val) };
+            println!("    {:04X} {:<5}{} x{:<7} {:<10} values {:<7} cycles {}..{}", pc,
+                if *write { "write" } else { "read" }, if *dma { " DMA" } else { "    " }, g.count, addrs, vals,
+                g.first_cycle, g.last_cycle);
+        }
+        if groups.len() > 24 {
+            println!("    ... and {} more", groups.len() - 24);
+        }
+        println!("  first accesses (cycle, instruction, access, address, value, block):");
+        for (cycle, pc, h) in &watch_events {
+            println!("    {:>10}  {:04X}  {}{}  {:04X} = {:02X}  block {}", cycle, pc,
+                if h.write { "W" } else { "R" }, if h.dma { " DMA" } else { "" }, h.addr, h.value, h.block);
+        }
     }
 
     if profile {
@@ -813,6 +889,59 @@ fn parse_args() -> Result<Options, String> {
         opts.max_steps = u64::MAX;
     }
     Ok(opts)
+}
+
+/// Totals for one (instruction, read/write, CPU/DMA) in a `--watch` report.
+#[derive(Default)]
+struct WatchGroup {
+    count: u64,
+    lo: u16,
+    hi: u16,
+    first_cycle: u64,
+    last_cycle: u64,
+    first_val: u8,
+    last_val: u8,
+}
+
+/// A `--watch` range: `[r:|w:]ADDR[-END|+LEN][@BLOCK]`, all hex. Without `r:` or `w:` both
+/// reads and writes are watched. `@BLOCK` limits a range at 8000H and up to one 32K block.
+/// Examples: `w:3200` (writes to one byte), `2D00-2DFF`, `r:C901+16@2`.
+fn parse_watch(spec: &str) -> Result<cpt_machine::Watch, String> {
+    let bad = || format!("bad --watch {:?} (want [r:|w:]ADDR[-END|+LEN][@BLOCK], in hex)", spec);
+    let hex = |s: &str| -> Result<u16, String> {
+        let s = s.trim();
+        let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+        let s = s.strip_suffix('h').or_else(|| s.strip_suffix('H')).unwrap_or(s);
+        u16::from_str_radix(s, 16).map_err(|_| bad())
+    };
+    let mut rest = spec.trim();
+    let (mut reads, mut writes) = (true, true);
+    if let Some(r) = rest.strip_prefix("r:") {
+        writes = false;
+        rest = r;
+    } else if let Some(r) = rest.strip_prefix("w:") {
+        reads = false;
+        rest = r;
+    }
+    let mut block = None;
+    if let Some((r, b)) = rest.split_once('@') {
+        block = Some(b.trim().parse::<usize>().map_err(|_| bad())?);
+        rest = r;
+    }
+    let (lo, hi) = if let Some((a, e)) = rest.split_once('-') {
+        (hex(a)?, hex(e)?)
+    } else if let Some((a, n)) = rest.split_once('+') {
+        let lo = hex(a)?;
+        let n = hex(n)?;
+        (lo, lo.saturating_add(n.saturating_sub(1)))
+    } else {
+        let a = hex(rest)?;
+        (a, a)
+    };
+    if hi < lo {
+        return Err(bad());
+    }
+    Ok(cpt_machine::Watch { lo, hi, reads, writes, block })
 }
 
 fn parse_u16(s: &str) -> Result<u16, String> {

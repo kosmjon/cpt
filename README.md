@@ -129,6 +129,12 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   read delay must be about 32,000 cycles or more; the software checks disk timing.
 - **Key scripts:** `{XX}` taps key number XX (hex), `{+XX}`/`{-XX}` press/release, `{ms N}`
   waits. Other options: `--screen-at`, `--brk-after`, `--profile`.
+- **Memory watchpoints:** `--watch [r:|w:]ADDR[-END|+LEN][@BLOCK]` (hex; repeatable)
+  reports which instructions read or wrote that memory: a table by instruction (with counts,
+  addresses, values and cycles) and the first accesses in order. `--watch-from <cycle>`
+  starts recording late, and `--watch-stop` halts at the first access with the usual
+  breakpoint report. Example: `--watch w:0E71` shows that the start-up code at 0D9CH stores
+  the operation number there. DMA writes are labelled, and instruction fetches count as reads.
 - **A second disk:** `--disk2 <img>` mounts a disk in station 2 (for example one made by
   `tools/mkdatadisk.py`), and `--save-disk1 <out>` / `--save-disk2 <out>` write a drive's
   image back at the end, with whatever the CPT wrote to it. To file to station 2, press
@@ -291,7 +297,7 @@ Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`
   real system").
   - The open work is the unidentified keys, the TTY protocol, printing and the character
     ROM.
-  - `cargo test --workspace` runs 339 tests with no warnings. The real-disk boot tests skip
+  - `cargo test --workspace` runs 352 tests with no warnings. The real-disk boot tests skip
     themselves unless `setup-disks.bat` has made `disk/cpt.img` and `disk/cpt2489.img`.
   - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
 - **The assembler** front end and code generation are working and tested for the confirmed

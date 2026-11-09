@@ -58,7 +58,42 @@ pub struct Machine {
     pub unmapped_io: Vec<(u8, u8)>,
     /// Unmapped I/O ports that were read (each listed once), for the same reason.
     pub unmapped_in: Vec<u8>,
+    /// Memory ranges being watched (debugging; empty normally, which costs nothing).
+    watches: Vec<Watch>,
+    /// Accesses to watched memory since the host last took them (see [`Machine::add_watch`]).
+    pub watch_hits: Vec<WatchHit>,
+    /// True while a device's DMA transfer is going through the memory path.
+    dma_active: bool,
 }
+
+/// A memory range to watch, for debugging: every matching access is logged in
+/// [`Machine::watch_hits`]. The host (`cpt-run --watch`) takes the log after each instruction
+/// and knows which instruction it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watch {
+    /// First and last address watched (inclusive).
+    pub lo: u16,
+    pub hi: u16,
+    pub reads: bool,
+    pub writes: bool,
+    /// For addresses of 8000H and up: only this block (None = whichever is selected).
+    pub block: Option<usize>,
+}
+
+/// One logged access to watched memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchHit {
+    pub addr: u16,
+    pub write: bool,
+    pub value: u8,
+    /// The block selected at 8000H–FFFFH when it happened.
+    pub block: usize,
+    /// It was a device's DMA transfer, not the CPU.
+    pub dma: bool,
+}
+
+/// The log stops growing here, in case a host never takes it.
+const WATCH_LOG_LIMIT: usize = 1_000_000;
 
 impl Machine {
     pub fn new(config: MachineConfig) -> Self {
@@ -70,7 +105,53 @@ impl Machine {
             display_window: None,
             unmapped_io: Vec::new(),
             unmapped_in: Vec::new(),
+            watches: Vec::new(),
+            watch_hits: Vec::new(),
+            dma_active: false,
         }
+    }
+
+    /// Watch a range of memory: every read and/or write in it is logged in `watch_hits`. The
+    /// CPU's instruction fetches are reads too, so a range holding code logs those.
+    pub fn add_watch(&mut self, w: Watch) {
+        self.watches.push(w);
+    }
+
+    /// Log an access if it falls in a watched range.
+    fn note_access(&mut self, addr: u16, write: bool, value: u8) {
+        if self.watch_hits.len() >= WATCH_LOG_LIMIT {
+            return;
+        }
+        let block = self.mem.selected_block();
+        for w in &self.watches {
+            if addr < w.lo || addr > w.hi || (write && !w.writes) || (!write && !w.reads) {
+                continue;
+            }
+            if addr >= BANK1_BASE && w.block.is_some_and(|b| b != block) {
+                continue;
+            }
+            self.watch_hits.push(WatchHit { addr, write, value, block, dma: self.dma_active });
+            return;
+        }
+    }
+
+    fn read_raw(&mut self, addr: u16) -> u8 {
+        if let Some((idx, offset)) = self.display_hit(addr) {
+            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
+                return d.read_cell(offset);
+            }
+        }
+        self.mem.read(addr)
+    }
+
+    fn write_raw(&mut self, addr: u16, val: u8) {
+        if let Some((idx, offset)) = self.display_hit(addr) {
+            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
+                d.write_cell(offset, val);
+                return;
+            }
+        }
+        self.mem.write(addr, val);
     }
 
     /// Attach the memory-mapped display device, mapping its character RAM at `config.display_base`
@@ -146,6 +227,7 @@ impl Machine {
     /// (so banked memory and the display window behave as for CPU accesses).
     fn service_dma(&mut self, i: usize) {
         while let Some(req) = self.devices[i].take_dma() {
+            self.dma_active = true;
             match req {
                 DmaRequest::WriteMemory { addr, data } => {
                     for (k, b) in data.iter().enumerate() {
@@ -158,6 +240,7 @@ impl Machine {
                     self.devices[i].dma_read_done(&data);
                 }
             }
+            self.dma_active = false;
         }
     }
 
@@ -193,22 +276,18 @@ impl Machine {
 
 impl Bus for Machine {
     fn read(&mut self, addr: u16) -> u8 {
-        if let Some((idx, offset)) = self.display_hit(addr) {
-            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
-                return d.read_cell(offset);
-            }
+        let v = self.read_raw(addr);
+        if !self.watches.is_empty() {
+            self.note_access(addr, false, v);
         }
-        self.mem.read(addr)
+        v
     }
 
     fn write(&mut self, addr: u16, val: u8) {
-        if let Some((idx, offset)) = self.display_hit(addr) {
-            if let Some(d) = self.devices[idx].as_any_mut().downcast_mut::<DisplayDevice>() {
-                d.write_cell(offset, val);
-                return;
-            }
+        self.write_raw(addr, val);
+        if !self.watches.is_empty() {
+            self.note_access(addr, true, val);
         }
-        self.mem.write(addr, val);
     }
 
     fn io_in(&mut self, port: u8) -> u8 {

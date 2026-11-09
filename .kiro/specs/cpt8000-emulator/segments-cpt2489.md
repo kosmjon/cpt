@@ -184,32 +184,97 @@ cpt-run --cpt-boot disk\cpt2489.img 0 - 40000 --serial-listen 127.0.0.1:2323 --l
   [VERIFY whether the CPT rejects bad parity or only strips it].
 - The browser build has the device too, but nothing attached to it.
 
+### How received characters flow **[CONFIRMED with `cpt-run --watch 3200-32FF`]**
+
+Run with `--serial-in` sending `48 C5 CC CC CF 8D 0A` after `CODE + I`, `ctty` enabled the
+port, and `--watch 3200-32FF`. For each byte:
+
+1. The 8251 interrupts on RST 1; the handler at **1DD8H** reads the byte (4BH).
+2. It calls **2042H** (bank 0), which stores the byte at 3200H, 3201H, … (seven bytes, in
+   order, from the instruction at 206EH). 2042H is the driver's **put** entry, also in the
+   jump table at 0130H.
+3. About 2,500 cycles later the instruction at 2000H (inside **1FDEH**, the driver's
+   **get** entry, jump-table slot **012AH**) reads the same byte back.
+4. The only caller of 012AH is a service routine at **DE42H** (block 1, inside the address
+   range of segment 43's function 01, D52EH–DF6CH). It checks flags in the control block
+   (ctl+3CH, 3DH, 3FH), calls driver slot 0127H (what that does isn't read yet), and then,
+   if 012AH returned a character, hands it to a per-character handler at **DEDAH**.
+
+**The driver's jump table** (bank 0), the comm segment's way into the serial code:
+
+| Slot | Jumps to | Used by |
+|---|---|---|
+| 0121H | 1F0AH | block 1 code at EBB0H and EC68H |
+| 0124H | 1F66H | nothing seen |
+| 0127H | 1F9EH | DE69H, just before the get (purpose not read yet; the receive interrupt also calls 1F9EH at 1E8BH) |
+| 012AH | 1FDEH | DE8BH (get a character) |
+| 012DH | 200FH | nothing seen |
+| 0130H | 2042H | the receive interrupt (1E65H calls 2042H directly) |
+
+Slots 0118H and 011EH (to 18F1H and 18F5H) belong to something else and are called from
+block 1 code around 8348H–9669H.
+
 ### Communications: known issues and next steps
 
 Status: the chip level works. The CPT sets up the 8251, both interrupts run, its first two
 bytes reach a TCP client, and the client's bytes reach the CPT's receive buffer
-[CONFIRMED by running it, 2026-11-03]. TTY mode isn't usable yet, because the CPT's own
-protocol in segment 43 isn't understood.
+[CONFIRMED by running it, 2026-11-03]. Several earlier "TTY doesn't work" findings were
+symptoms of a CPU bug, now fixed (next subsection). With the fix, received text reaches the
+screen, but the glyphs are wrong, so TTY mode still isn't usable.
+
+**The EI bug and what it explained**
+
+The 8080's `EI` enables interrupts only after the *next* instruction completes. The CPU core
+enabled them at once. With a level-sensitive line (the 8251's TxRDY), a handler ending in
+`EI; RET` was interrupted again before the `RET`, so the stack grew without bound and
+overwrote the comm control block flags at 2D3CH–2D3FH. The fix is in
+`crates/i8080-cpu/src/lib.rs` (`ei_pending`; `DI` right after `EI` leaves interrupts off).
+Tests: `i8080-cpu/tests/interrupts.rs`, `cpt-machine/tests/level_interrupt.rs`.
+Effects of the fix, all [CONFIRMED by running]:
+
+- The start-up sends just `04`. The old `04 4E` was stack garbage.
+- The `@O>>^` junk on the typing line is gone.
+- CODE + K after enabling TTY shows `COMMUNICATIONS:  Stop Select Status`.
+- Received bytes now appear on the screen (4 lines of wrong glyphs for "hello world",
+  CR, "second line", CR sent with even parity).
+
+**The communications menus**
+
+Prompts in the resident table (block 0, B6E8H) and their code in block 1. The prompts show
+that received text can go to the screen or to disk, and that sending can come from the
+keyboard, the screen or disk.
+
+| Prompt | Id | Code (block 1) |
+|---|---|---|
+| COMMUNICATIONS: =Off =On | 044D | D45B |
+| COMMUNICATIONS: =Stop =Select =Status | 0457 | D54A |
+| SELECTION: =Transmission =Reception | 0458 | D55E |
+| TRANSMISSION: =KB =KB+Screen =Screen =Disk | 0461 | D571 |
+| RECEPTION: =None =Screen =Disk | 0462 | D628, DED2 |
+| DISK TRANSMISSION: =Reselect =Continue | 0463 | D58F, DEBF |
+| PROCEDURE: =Begin =Wait for signal | 0464 | D606 |
+| STOP: =Transmission =Reception | 0459 | D65F |
+| DESTINATION: =CPU =Printer =Punch | 046D | EA42 |
+| RATE | 046E | D5D7, D63C |
+| STOP BITS | 046F | D5B0 |
+| SCREEN SIZE | 0472 | block 0 F6CF |
+
+CHARACTER LENGTH/PARITY, WRAPAROUND, AUTOMATIC NEW LINE, BLACK-ON-WHITE and TEXT UP CR
+TRANSLATION (0470, 0471, 0473–0476) are not referenced by any code found.
 
 **Known issues: the CPT side (the protocol)**
 
-1. **Received text isn't filed.** The bytes land in the receive buffer at 3200H, parity bits
-   included. Nothing then moves them into the document, not even after CR LF or EOT (`84H`).
-   Who reads that buffer, and what makes it do so, is unknown.
-2. **Typed text isn't sent.** Text typed after TTY is enabled appears on the typing line,
-   and each queued byte comes with an `OUT 00H,10H`. But the transmitter stays off (command
-   `16H` since the start-up `{04}N`), so nothing goes out.
-   - Writes at E92DH, E93EH, E944H (4CH), E9E6H and E9FEH would change the command, but they
-     never ran in our tests.
-   - The CPT is probably waiting for something before it turns the transmitter back on: a
-     key (a "send" command), a reply from the host, or a modem signal.
-3. **The start-up `{04}N` is unexplained.** It's EOT followed by `N` (4EH, which happens to
-   have even parity already). It may be part of a host handshake, such as "not ready" or a
-   station ID [HYPOTHESIS].
-4. **The typing line shows `@O>>^`** in reverse video right after set-up. The screen has two
-   codes the display decoder has no rule for, FEH and B7H. It may be a TTY status line drawn
-   with codes we decode wrongly.
-5. **CODE + K** (the editor's other route into segment 43) showed nothing visible.
+1. **Received text reaches the screen with wrong glyphs.** Bytes land in the receive queue at
+   3200H with parity bits, and the consumer (DE42H, per-character handler DEDAH) drains them
+   at once [CONFIRMED with `cpt-run --watch`]. The translation between queue and screen is
+   wrong or unknown. Not yet tried: choosing Reception = Screen or Disk in the menus. Filing
+   to a document is untested.
+2. **Typed text isn't sent** [needs retest after the EI fix]. Before the fix the transmitter
+   stayed off (command `16H`). Writes at E92DH, E93EH, E944H (4CH), E9E6H and E9FEH would
+   change the command. Try Select, Transmission, KB.
+3. **The start-up handshake** is just `04` (EOT) now. The old `{04}N` was an artifact.
+4. **The `@O>>^` typing-line junk** is gone, so FEH and B7H need no rules for it.
+5. **CODE + K** now shows the Stop/Select/Status menu, so the menus above are reachable.
 6. **Parity handling is unknown.** The receive path can strip bit 7 (`ANI 7FH`). Whether it
    also checks parity, and rejects or marks bad characters, hasn't been traced. Telnet
    clients send 8-bit data with no parity bit.
@@ -250,11 +315,17 @@ protocol in segment 43 isn't understood.
 
 **Suggested next steps** (in order)
 
-1. **Find who consumes the receive buffer.** Add a memory watchpoint to `cpt-run`
-   (`--watch <addr>`: report the PC of each read or write of an address, e.g. 3200H, the
-   pointer at ctl+2CH = 2D2CH, and 2042H's buffer). Then trace from the reader to how
-   received text is filed. This answers issue 1.
-2. **Find what turns the transmitter back on.** Break at E92DH, E93EH, E9E6H and E9FEH to
+1. **Trace the per-character handler.** The memory watchpoint is done (`cpt-run --watch`) and
+   found the consumer: the comm segment's service routine at DE42H (block 1), which calls
+   the driver's get-character entry (012AH) and, for each character, a handler at DEDAH.
+   Disassemble DEDAH–DF6CH (it runs the character through the reception code set and then
+   somewhere) and watch what it writes, with `--watch` on the control block (2D00H–2D3FH)
+   and on any buffer it fills. This answers issue 1.
+2. **Explore the menus** with CODE + K: Select, Reception, Screen / Disk, and Select,
+   Transmission, KB / KB+Screen / Screen / Disk. Check whether typed text is sent and whether
+   Disk reception files a document. Then find the glyph problem (reception code set
+   C-ASCII.R, parity stripping at ctl+09 / `ANI 7FH`).
+2b. **Find what turns the transmitter on.** Break at E92DH, E93EH, E9E6H and E9FEH to
    see which key or event reaches them. Try CODE + I and CODE + K followed by the function
    keys (PRINT, OUT, RETURN, the staple key) in TTY mode. This answers issue 2.
 3. **Map segment 43's six functions** from the editor's calls (2B.00, 01, 03, 04, 05, 07 at
