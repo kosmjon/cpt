@@ -486,6 +486,52 @@ fn tty_reception_to_disk_files_a_document() {
     assert!(bytes.windows(doc.len()).any(|w| w == doc), "RXTEST's text on the disk");
 }
 
+/// PRINT, RETURN prints the document on printer A (the daisy-wheel port at 42H/43H). The
+/// emulated printer is always ready and loads the next sheet when the CPT asks for one, so the
+/// two-page letter comes out whole. The characters are decoded through the print-wheel table
+/// the driver uses, and laid out by carriage (1/60 inch) and paper (1/48 inch) position.
+#[test]
+fn print_sends_the_letter_to_the_daisy_wheel_printer() {
+    let Some(img) = image() else { return };
+    let text = std::env::temp_dir().join(format!("cpt-print-{}.txt", std::process::id()));
+    let out = boot_with(&img, "200000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{7D}{ms 3000}{14}{ms 60000}", "--keys-at", "80000000",
+        "--printer-text", text.to_str().unwrap()]);
+    let printed = std::fs::read_to_string(&text).expect("the printout");
+    let _ = std::fs::remove_file(&text);
+    let report = out.lines().find(|l| l.starts_with("printer A (42H/43H)")).unwrap_or_else(|| panic!("no printer report:\n{}", out));
+    assert!(report.contains("strobe x count: 00x1 "), "one sheet loaded: {}", report);
+    let pages: Vec<&str> = printed.split('\u{0C}').collect();
+    assert_eq!(pages.len(), 2, "{}", printed);
+    let lines: Vec<&str> = pages[0].lines().collect();
+    assert_eq!(lines[0], "           August 19, 1987", "{}", pages[0]);
+    assert_eq!(lines[5], "           Mr. Carl Wales");
+    assert!(lines.contains(&"           Dear Carl:"), "{}", pages[0]);
+    assert!(pages[1].starts_with("           has been terminated, effective July 31, 1987.\n"), "{}", pages[1]);
+    assert!(pages[1].contains("           ROY CLESTER\n"), "{}", pages[1]);
+    assert!(!printed.contains('?'), "every character decoded:\n{}", printed);
+}
+
+/// The TTY disk has its own copy of the driver and print-wheel table (block 1, 999AH).
+#[test]
+fn print_works_on_the_tty_disk_too() {
+    let Some(img) = tty_image() else { return };
+    let out = boot_with(&img, "160000000", &["--keys", "{3D}directions{14}{ms 8000}{7D}{ms 3000}{14}{ms 30000}", "--keys-at", "80000000"]);
+    assert!(out.contains("  printout (print-wheel table in block 1, "), "{}", out);
+    assert!(out.contains("    |           D. BULMER\n") || out.contains("    |           D. BULMER\r\n"), "{}", out);
+    assert!(out.lines().any(|l| l.trim_end() == "    |                             THURSDAY, JULY 23, 1987"), "{}", out);
+}
+
+/// A printer that is off reads 00H: the CPT restores it, waits, and says so (message 8.51).
+#[test]
+fn print_with_the_printer_off_says_so() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "112000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{7D}{ms 3000}{14}{ms 8000}", "--keys-at", "80000000",
+        "--printer-status", "00", "--screen-at", "111000000"]);
+    assert!(out.lines().any(|l| l.starts_with("   1 |PRINT      1 RC-L1") && l.contains("8.51")), "{}", out);
+    let report = out.lines().find(|l| l.starts_with("printer A (42H/43H)")).unwrap();
+    assert!(report.contains("status 00,") && report.contains("(strobe x count: 80x1)"), "{}", report);
+}
+
 /// The speaker (8253 counter 0): start-up plays sound 1 from the table at 1581H (2000 Hz for
 /// 100 ms, then 1000 Hz for 250 ms), and IN clicks (sound 0: 1333 Hz for 50 ms).
 #[test]

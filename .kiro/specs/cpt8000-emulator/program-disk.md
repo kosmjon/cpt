@@ -1094,6 +1094,69 @@ which is why it isn't in a post-start-up dump.
 - Confirm what 39C1H returns as a segment's "base": its function table or the start of its
   code.
 
+## The printer **[CONFIRMED by disassembly and by printing on both disks; line names HYPOTHESIS]**
+
+Per the user, a workstation drives one printer directly. Sharing a printer meant saving a
+document to the SRS (Shared Resource System, a shared hard disk server) so that the
+workstation with the printer could print it. CODE + PRINT's `PRINTER A B C SRS` picks the
+destination.
+
+**The port.** A parallel daisy-wheel interface, much like a Diablo HyType II:
+
+| Port | Use |
+|---|---|
+| 42H out | control register: idle 41H; a command is a pulse `(strobe AND BEH) OR 41H`, then 41H (9458H on cpt.img, interrupts off) |
+| 43H out | data latch: a 12-bit word, written high byte then low byte before the strobe |
+| 43H in | status |
+| 44H/45H | the same for printer B (selected by the printer index; A1F2H–A218H) |
+
+| Strobe | Command | Word |
+|---|---|---|
+| 80H | restore, at the start of each page | none |
+| 08H | strike a character | the print-wheel table entry, complemented (bit 11 flipped for bold [HYPOTHESIS]) |
+| 10H | carriage move | low 10 bits in 1/60 inch (6 = one pica column); bit 10 (400H) = to the left |
+| 20H | paper feed | low 10 bits in 1/48 inch (8 = one line at 6 per inch) |
+| 02H, 04H | other commands seen in the driver, not used by a plain print | |
+
+| Status bit | Use |
+|---|---|
+| 7 | on and ready; waited for after restore. 00H (no printer) gives "THE PRINTER SEEMS TO BE OFF." (8.51) |
+| 6 | waited for before each character |
+| 4, 2 | waited for before other commands (masks 14H, 10H) |
+| 1 | **new sheet**: at the end of a page the CPT shows "PLEASE PREPARE THE PRINTER FOR A NEW PAGE." (8.57) and polls every 0.1 s until this bit differs from what it was (A219H) |
+| 0 | read after strobe 04H |
+
+The other printer messages are 8.53 (new ribbon), 8.54 (reporting problems), 8.58 (does not
+respond) and 8.59 (waiting); which status bits raise them hasn't been traced.
+
+**The print-wheel table** maps character codes to words. The driver finds it with
+`CALL 00EEH; LXI H,table; CPI 02H; JNZ`: 9632H on cpt.img and 999AH on cpt2489, both in
+block 1. Its first byte is its format: 1 = a byte per code; 2 = two bytes per code from 20H;
+3 = a count, then two bytes per code from 20H; anything else = the first code, then a count,
+then two bytes per code, sent complemented. Both disks use the last (from 20H, 90H codes,
+87 distinct characters). Codes F0H and up are looked up as code − 50H.
+
+**In the emulator** (`crates/cpt-machine/src/cpt_printer.rs`, in `CptSystem` as printer A):
+- `CptPrinter` reads as always ready (status F4H) and logs every strobe with its word.
+- With `auto_sheet` (on by default) it loads the next sheet when the CPT waits for one: 20
+  status reads in a row with no command between them flip status bit 1. A printer that is
+  off (bit 7 clear) loads nothing.
+- `PrintWheel::find` reads the table from memory; `render_text` lays the characters out by
+  carriage and paper position (6 units per column, 8 per line), a form feed between pages.
+- `cpt-run --cpt-boot` reports the printer and shows the printout. `--printer-text <file>`
+  saves it, `--printer-log <file>` saves the raw commands, `--printer-status 00` unplugs it.
+- `--watch-io 42-45` logs every IN and OUT on those ports with the instruction that did it
+  (added to trace this).
+
+Example: `{3D}rc-l1{14}{ms 8000}{7D}{ms 3000}{14}` (IN RC-L1, PRINT, RETURN) prints the
+two-page letter to Carl Wales on cpt.img (boot test
+`print_sends_the_letter_to_the_daisy_wheel_printer`).
+
+**Ports 60H–65H** are a different device: code in block 2 ECD0H–EE80H on cpt.img polls 61H
+about a thousand times during start-up, uses DMA channel 1 (12H/13H, mode 73H on 18H), and
+compares replies with 06H, 13H, 15H, 17H and 1FH (ACK, XOFF, NAK, ETB, …). It may be the SRS
+link [HYPOTHESIS]. It isn't modelled; with nothing there start-up carries on.
+
 ## The speaker **[CONFIRMED by disassembly and by running it]**
 
 The speaker is driven by the 8253's **counter 0** (port 1CH; control port 1FH). Counter 0

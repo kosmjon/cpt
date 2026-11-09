@@ -9,6 +9,7 @@ use crate::cpt_display::{self, CptScreen};
 use crate::cpt_floppy::{self, CptFloppy};
 use crate::cpt_interrupts::{InterruptAck, Pit8253};
 use crate::cpt_keyboard::CptKeyboard;
+use crate::cpt_printer::CptPrinter;
 use crate::cpt_usart::Usart8251;
 use crate::{DiskImage, Executive, Machine, MachineConfig, TimerDevice};
 use i8080_cpu::{Bus, Cpu};
@@ -37,6 +38,7 @@ pub struct CptSystem {
     pub ack: usize,
     pub kb: usize,
     pub usart: usize,
+    pub printer: usize,
 }
 
 impl CptSystem {
@@ -82,11 +84,14 @@ impl CptSystem {
         // Nothing is attached to the line until the host sets DSR and pumps it.
         let usart = machine.device_count();
         machine.attach_device(Box::new(Usart8251::cpt()));
+        // Printer A on the parallel daisy-wheel port at 42H/43H, always ready.
+        let printer = machine.device_count();
+        machine.attach_device(Box::new(CptPrinter::cpt()));
 
         machine.mem.load_bank0(0, &boot_sector);
         let mut cpu = Cpu::new();
         cpu.pc = 0;
-        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb, usart }
+        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb, usart, printer }
     }
 
     /// Take both disks out (drive 1, drive 2), e.g. before a reset or power-off.
@@ -113,6 +118,10 @@ impl CptSystem {
 
     pub fn usart(&mut self) -> &mut Usart8251 {
         self.exec.machine.device_mut(self.usart).unwrap().as_any_mut().downcast_mut().unwrap()
+    }
+
+    pub fn printer(&mut self) -> &mut CptPrinter {
+        self.exec.machine.device_mut(self.printer).unwrap().as_any_mut().downcast_mut().unwrap()
     }
 
     /// Decode the screen the display hardware would show now.

@@ -144,6 +144,9 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   the code and stack that asked for it.
 - **Serial:** the 8251 can be a Telnet server (`--serial-listen 127.0.0.1:2323`), or take
   scripted input (`--serial-in`).
+- **Printer:** PRINT goes to an emulated daisy-wheel printer. The report shows the printout;
+  `--printer-text out.txt` saves it, `--printer-log` saves the raw commands, and
+  `--printer-status 00` unplugs the printer. `--watch-io 42-45` logs port I/O.
 
 #### Tools
 
@@ -184,10 +187,12 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   real machine with CODE + O and operation 5, 6 or 7. The `cpt2489` disk has their message
   text, but not their code, so these three operations aren't available from the disks we
   have. They would need another disk image.
-- **Printing:** there's no printer device.
+- **Printing:** works from `cpt-run` as plain text. The browser has the printer too, but
+  no way to show or save the printout yet. Bold, underline and the wheel's special
+  characters aren't rendered, and the SRS link (ports 60H–65H) isn't modelled.
 - **Glyphs:** the character ROM is unknown, so special glyphs are ASCII stand-ins.
 - **Patch pages:** the mechanism is decoded (documents `.P`–`.P9`), but neither disk has one,
-  and the syntax is untested.
+  but a .P1 page was added to a copy of a program disk .img and it loaded the patch correctly so the syntax has been proven.
 
 ## Running CP/M 2.2 over the emulated serial port
 
@@ -298,9 +303,9 @@ Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`
 - **The emulator** boots and runs the real CPT software from the original program disks, on
   the command line and in a browser. Most editing features work (see "What works on the
   real system").
-  - The open work is the unidentified keys, the rest of TTY, printing and the character
-    ROM.
-  - `cargo test --workspace` runs 355 tests with no warnings. The real-disk boot tests skip
+  - The open work is the unidentified keys, the rest of TTY, printer output in the browser,
+    the SRS link and the character ROM.
+  - `cargo test --workspace` runs 363 tests with no warnings. The real-disk boot tests skip
     themselves unless `setup-disks.bat` has made `disk/cpt.img` and `disk/cpt2489.img`.
   - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
 - **The assembler** front end and code generation are working and tested for the confirmed

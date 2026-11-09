@@ -19,6 +19,8 @@
 //!           [--brk-after <cycle>] [--brk-read <t41s14|L660|670>] [--profile]
 //!           [--disk2 <img>] [--save-disk1 <out>] [--save-disk2 <out>]
 //!           [--watch [r:|w:]ADDR[-END|+LEN][@BLOCK]]... [--watch-from <cycle>] [--watch-stop]
+//!           [--watch-io <ports, e.g. 42-45,60>]... [--watch-io-max <lines>]
+//!           [--printer-status <hex>] [--printer-log <out>] [--printer-text <out>]
 //!           [--serial-listen <addr> [--serial-raw]] [--serial-in "<script>"]
 //!           [--serial-in-at <cycle>] [--live]
 //!                                          Boot a real CPT program disk on the real hardware
@@ -140,6 +142,13 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mut watch_specs: Vec<String> = Vec::new();
     let mut watch_from: u64 = 0;
     let mut watch_stop = false;
+    // I/O watch: every IN/OUT on these ports, with the instruction (timeline up to io_log_max).
+    let mut watch_io_specs: Vec<String> = Vec::new();
+    let mut io_log_max: usize = 400;
+    // The printer: its status byte (default: ready) and a file for every command it gets.
+    let mut printer_status: Option<u8> = None;
+    let mut printer_log: Option<String> = None;
+    let mut printer_text: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -157,6 +166,14 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
             "--watch-from" => watch_from = it.next().ok_or("--watch-from needs a cycle count")?
                 .parse().map_err(|_| "invalid --watch-from")?,
             "--watch-stop" => watch_stop = true,
+            "--printer-status" => printer_status = Some(u8::from_str_radix(
+                it.next().ok_or("--printer-status needs a hex byte")?.trim_end_matches(['h', 'H']), 16)
+                .map_err(|_| "invalid --printer-status (hex, e.g. F4)")?),
+            "--printer-log" => printer_log = Some(it.next().ok_or("--printer-log needs a file name")?.clone()),
+            "--printer-text" => printer_text = Some(it.next().ok_or("--printer-text needs a file name")?.clone()),
+            "--watch-io" => watch_io_specs.push(it.next().ok_or("--watch-io needs ports, e.g. 42-45,60")?.clone()),
+            "--watch-io-max" => io_log_max = it.next().ok_or("--watch-io-max needs a count")?
+                .parse().map_err(|_| "invalid --watch-io-max")?,
             "--brk-read" => brk_read = Some(parse_sector(it.next().ok_or("--brk-read needs a sector: t41s14, L660 or 656")?)?),
             "--keys" => keys_script = Some(it.next().ok_or("--keys needs a script")?.clone()),
             "--keys-at" => keys_at = it.next().ok_or("--keys-at needs a cycle count")?
@@ -214,6 +231,10 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         sys.floppy().mount(1, d);
     }
     let (fdc_dev, pit_dev, ack_dev, kb_dev, usart_dev) = (sys.fdc, sys.pit, sys.ack, sys.kb, sys.usart);
+    let printer_dev = sys.printer;
+    if let Some(s) = printer_status {
+        sys.printer().status = s;
+    }
     // Something is on the line (DSR on) when there's a terminal or a serial input script.
     let serial_on = serial_listen.is_some() || !serial_bytes.is_empty();
     sys.usart().set_dsr(serial_on);
@@ -225,6 +246,16 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     };
     let mut exec = sys.exec;
     let watching = !watch_specs.is_empty();
+    let watching_io = !watch_io_specs.is_empty();
+    for spec in &watch_io_specs {
+        for port in parse_ports(spec)? {
+            exec.machine.watch_io(port);
+        }
+    }
+    // What the I/O watch saw: totals per (port, OUT) and a timeline.
+    let mut io_counts: std::collections::BTreeMap<(u8, bool), u64> = std::collections::BTreeMap::new();
+    let mut io_log: Vec<String> = Vec::new();
+    let mut io_total: u64 = 0;
     for spec in &watch_specs {
         exec.machine.add_watch(parse_watch(spec)?);
     }
@@ -307,8 +338,26 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         if watching {
             exec.machine.watch_hits.clear();
         }
+        if watching_io {
+            exec.machine.io_hits.clear();
+        }
         exec.step();
         let now = exec.cpu.cycles - start;
+        if watching_io && !exec.machine.io_hits.is_empty() {
+            if now >= watch_from {
+                let blk = if pc_before >= 0x8000 { format!(" block {}", exec.machine.selected_block()) } else { String::new() };
+                for h in std::mem::take(&mut exec.machine.io_hits) {
+                    io_total += 1;
+                    *io_counts.entry((h.port, h.write)).or_insert(0) += 1;
+                    if io_log.len() < io_log_max {
+                        io_log.push(format!("    {:>10}  {:04X}{}  {} {:02X}H = {:02X}", now, pc_before, blk,
+                            if h.write { "OUT" } else { "IN " }, h.port, h.value));
+                    }
+                }
+            } else {
+                exec.machine.io_hits.clear();
+            }
+        }
         if watching && now >= watch_from && !exec.machine.watch_hits.is_empty() {
             let hits = std::mem::take(&mut exec.machine.watch_hits);
             for h in &hits {
@@ -472,6 +521,55 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let acks: Vec<String> = ack.acks.iter().map(|(v, n)| format!("{:02X}x{}", v, n)).collect();
     println!("interrupt acknowledges on 00H: {}", if acks.is_empty() { "(none)".into() } else { acks.join(" ") });
 
+    // The printer, if the system used it.
+    let prn = exec.machine.device_mut(printer_dev).unwrap().as_any_mut()
+        .downcast_mut::<cpt_machine::CptPrinter>().unwrap();
+    if !prn.log.is_empty() || prn.status_reads > 0 {
+        let mut by_strobe: std::collections::BTreeMap<u8, usize> = std::collections::BTreeMap::new();
+        for c in &prn.log {
+            *by_strobe.entry(c.strobe).or_insert(0) += 1;
+        }
+        let kinds: Vec<String> = by_strobe.iter().map(|(s, n)| format!("{:02X}x{}", s, n)).collect();
+        println!("\nprinter A (42H/43H): status {:02X}, {} status reads, {} commands (strobe x count: {})",
+            prn.status, prn.status_reads, prn.log.len(), kinds.join(" "));
+        let shown: Vec<String> = prn.log.iter().take(80).map(|c| format!("{:02X}:{:03X}", c.strobe, c.word)).collect();
+        println!("  first commands (strobe:word): {}", shown.join(" "));
+        if let Some(path) = &printer_log {
+            let text: String = prn.log.iter().map(|c| format!("{:02X} {:04X}\n", c.strobe, c.word)).collect();
+            std::fs::write(path, text).map_err(|e| format!("writing {}: {}", path, e))?;
+            println!("  wrote {} commands to {}", prn.log.len(), path);
+        }
+        let log = prn.log.clone();
+        // The characters: through the print-wheel table the driver uses, found in memory.
+        let m = &mut exec.machine;
+        let keep = m.selected_block();
+        let mut wheel = None;
+        for b in 0..m.mem.block_count() {
+            m.mem.select_block(b);
+            let block: Vec<u8> = (0x8000u32..0x10000).map(|a| m.read(a as u16)).collect();
+            if let Some(w) = cpt_machine::PrintWheel::find(&block) {
+                wheel = Some((b, w));
+                break;
+            }
+        }
+        m.mem.select_block(keep);
+        match wheel {
+            Some((b, w)) if log.iter().any(|c| c.strobe & cpt_machine::cpt_printer::STROBE_CHARACTER != 0) => {
+                let text = cpt_machine::cpt_printer::render_text(&log, &w);
+                println!("  printout (print-wheel table in block {}, {} characters):", b, w.len());
+                for line in text.lines().take(70) {
+                    println!("    |{}", line.replace('\u{0C}', "--- new page ---"));
+                }
+                if let Some(path) = &printer_text {
+                    std::fs::write(path, &text).map_err(|e| format!("writing {}: {}", path, e))?;
+                    println!("  wrote the printout to {}", path);
+                }
+            }
+            Some(_) => {}
+            None => println!("  (no print-wheel table found in memory, so the characters can't be decoded)"),
+        }
+    }
+
     let kb = exec.machine.device_mut(kb_dev).unwrap().as_any_mut()
         .downcast_mut::<cpt_machine::CptKeyboard>().unwrap();
     if !schedule.is_empty() {
@@ -493,6 +591,18 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         println!("  received {} bytes ({} still waiting)", u.received, u.rx_waiting() + serial_bytes.len() - next_serial);
     }
 
+    if watching_io {
+        println!("\nwatch-io {}: {} accesses{}", watch_io_specs.join(" "), io_total,
+            if watch_from > 0 { format!(" (from cycle {})", watch_from) } else { String::new() });
+        let counts: Vec<String> = io_counts.iter()
+            .map(|((p, w), n)| format!("{} {:02X}H x{}", if *w { "OUT" } else { "IN" }, p, n)).collect();
+        println!("  totals: {}", counts.join(", "));
+        println!("  timeline (cycle, instruction, access, port, value){}:",
+            if io_total as usize > io_log.len() { format!(", the first {}", io_log.len()) } else { String::new() });
+        for l in &io_log {
+            println!("{}", l);
+        }
+    }
     if watching {
         println!("\nwatch {}: {} accesses{}", watch_specs.join(" "), watch_total,
             if watch_from > 0 { format!(" (from cycle {})", watch_from) } else { String::new() });
@@ -889,6 +999,26 @@ fn parse_args() -> Result<Options, String> {
         opts.max_steps = u64::MAX;
     }
     Ok(opts)
+}
+
+/// `--watch-io` ports: hex ports and ranges separated by commas, e.g. `42-45,60`.
+fn parse_ports(spec: &str) -> Result<Vec<u8>, String> {
+    let bad = || format!("bad --watch-io {:?} (want hex ports or ranges, e.g. 42-45,60)", spec);
+    let hex = |s: &str| u8::from_str_radix(s.trim().trim_end_matches(['h', 'H']), 16).map_err(|_| bad());
+    let mut out = Vec::new();
+    for part in spec.split(',') {
+        match part.split_once('-') {
+            Some((a, b)) => {
+                let (a, b) = (hex(a)?, hex(b)?);
+                if a > b {
+                    return Err(bad());
+                }
+                out.extend(a..=b);
+            }
+            None => out.push(hex(part)?),
+        }
+    }
+    Ok(out)
 }
 
 /// Totals for one (instruction, read/write, CPU/DMA) in a `--watch` report.

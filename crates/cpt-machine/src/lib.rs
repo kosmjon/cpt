@@ -10,6 +10,7 @@ pub mod cpt_display;
 pub mod cpt_floppy;
 pub mod cpt_interrupts;
 pub mod cpt_keyboard;
+pub mod cpt_printer;
 pub mod cpt_system;
 pub mod cpt_usart;
 pub mod demo;
@@ -31,6 +32,7 @@ pub use cpt_display::CptScreen;
 pub use cpt_floppy::CptFloppy;
 pub use cpt_interrupts::{InterruptAck, Pit8253};
 pub use cpt_keyboard::CptKeyboard;
+pub use cpt_printer::{CptPrinter, PrintWheel, PrinterCommand};
 pub use cpt_system::CptSystem;
 pub use cpt_usart::Usart8251;
 pub use disk_controller::DiskController;
@@ -62,6 +64,9 @@ pub struct Machine {
     watches: Vec<Watch>,
     /// Accesses to watched memory since the host last took them (see [`Machine::add_watch`]).
     pub watch_hits: Vec<WatchHit>,
+    /// I/O ports being watched (a bit per port) and the accesses since the host last took them.
+    io_watch: [u64; 4],
+    pub io_hits: Vec<IoHit>,
     /// True while a device's DMA transfer is going through the memory path.
     dma_active: bool,
 }
@@ -92,6 +97,14 @@ pub struct WatchHit {
     pub dma: bool,
 }
 
+/// One logged `IN` (write = false) or `OUT` on a watched port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoHit {
+    pub port: u8,
+    pub write: bool,
+    pub value: u8,
+}
+
 /// The log stops growing here, in case a host never takes it.
 const WATCH_LOG_LIMIT: usize = 1_000_000;
 
@@ -107,6 +120,8 @@ impl Machine {
             unmapped_in: Vec::new(),
             watches: Vec::new(),
             watch_hits: Vec::new(),
+            io_watch: [0; 4],
+            io_hits: Vec::new(),
             dma_active: false,
         }
     }
@@ -291,6 +306,31 @@ impl Bus for Machine {
     }
 
     fn io_in(&mut self, port: u8) -> u8 {
+        let v = self.io_in_raw(port);
+        self.note_io(port, false, v);
+        v
+    }
+
+    fn io_out(&mut self, port: u8, val: u8) {
+        self.note_io(port, true, val);
+        self.io_out_raw(port, val);
+    }
+}
+
+impl Machine {
+    /// Watch I/O ports: every `IN` and `OUT` on a port whose bit is set is logged in
+    /// `io_hits` (debugging; `cpt-run --watch-io`).
+    pub fn watch_io(&mut self, port: u8) {
+        self.io_watch[port as usize / 64] |= 1 << (port % 64);
+    }
+
+    fn note_io(&mut self, port: u8, write: bool, value: u8) {
+        if self.io_watch[port as usize / 64] & (1 << (port % 64)) != 0 && self.io_hits.len() < WATCH_LOG_LIMIT {
+            self.io_hits.push(IoHit { port, write, value });
+        }
+    }
+
+    fn io_in_raw(&mut self, port: u8) -> u8 {
         if port == self.config.bank_select_port {
             return self.mem.selected_block() as u8;
         }
@@ -304,7 +344,7 @@ impl Bus for Machine {
         0
     }
 
-    fn io_out(&mut self, port: u8, val: u8) {
+    fn io_out_raw(&mut self, port: u8, val: u8) {
         if port == self.config.bank_select_port {
             let index = self.config.bank_select_encoding.decode(val);
             self.mem.select_block(index);
