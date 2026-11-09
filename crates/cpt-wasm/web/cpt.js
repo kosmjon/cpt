@@ -36,6 +36,7 @@ async function main() {
   const drives = setupDrives(ws);
   setupPower(ws, keys, drives);
   setupSpecialKeys(ws, keys);
+  const printer = setupPrinter(ws);
 
   function render() {
     if (!ws.powered) {
@@ -56,9 +57,125 @@ async function main() {
       statusEl.textContent = "insert a CPT program disk in drive 1";
     }
     drives.update();
+    printer.update();
     requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
+}
+
+// Printer A: the printout as sheets of paper, redrawn whenever the CPT has sent more, so the
+// document appears line by line (the CPT sends about 110 characters a second). Pages are
+// separated by form feeds in the text. The paper follows the print head unless you have
+// scrolled up to read.
+function setupPrinter(ws) {
+  const { real } = ws;
+  const feed = document.getElementById("paperFeed");
+  const stateEl = document.getElementById("printerState");
+  const powerBtn = document.getElementById("printerPower");
+  const powerLed = powerBtn.querySelector(".led");
+  const powerLabel = powerBtn.querySelector("span:last-child");
+  const emptyNote = feed.querySelector(".empty");
+  let shown = -1;
+  let text = "";
+  let lastChange = -Infinity;
+  let on = true;
+  // Follow the print head: keep the line being printed in view, just above the bottom of the
+  // paper window, so the paper scrolls up as printing reaches the bottom. Scrolling up to
+  // read stops following; scrolling back to the print head (or a new printout) resumes it.
+  let follow = true;
+  let head = null;
+  const HEAD_MARGIN = 28; // px kept below the print head
+
+  // Where the print head is, relative to the bottom of the visible paper (px; > 0 = below it).
+  function headBelowBottom() {
+    if (!head || !head.getBoundingClientRect) return null;
+    return head.getBoundingClientRect().bottom - feed.getBoundingClientRect().bottom;
+  }
+
+  function followHead() {
+    const below = headBelowBottom();
+    if (below !== null && below > -HEAD_MARGIN) feed.scrollTop += below + HEAD_MARGIN;
+  }
+
+  feed.addEventListener("scroll", () => {
+    const below = headBelowBottom();
+    // In view (with some slack) = following; scrolled away from it = reading.
+    if (below !== null) follow = below <= HEAD_MARGIN + 4 && below > -feed.clientHeight;
+  });
+
+  function draw(printing) {
+    const keep = feed.scrollTop;
+    feed.replaceChildren();
+    head = null;
+    if (!text) {
+      feed.append(emptyNote);
+      follow = true;
+      return;
+    }
+    const pages = text.split("\f");
+    pages.forEach((page, i) => {
+      const sheet = document.createElement("div");
+      sheet.className = "sheet";
+      sheet.setAttribute("aria-label", `page ${i + 1}`);
+      sheet.textContent = page;
+      if (i === pages.length - 1) {
+        // The print head sits after the last character struck (not after the line's
+        // newline). It shows only while printing, but marks the spot to follow either way.
+        sheet.textContent = page.replace(/\n+$/, "");
+        head = document.createElement("span");
+        head.className = "print-head";
+        if (!printing) head.style.visibility = "hidden";
+        sheet.append(head);
+      }
+      feed.append(sheet);
+    });
+    // Replacing the sheets resets the scroll position: put it back, then follow the head.
+    feed.scrollTop = keep;
+    if (follow) followHead();
+  }
+
+  powerBtn.addEventListener("click", () => {
+    on = !on;
+    real.setPrinterOn(on);
+    powerLed.classList.toggle("on", on);
+    powerLabel.textContent = on ? "ON" : "OFF";
+    powerBtn.setAttribute("aria-pressed", String(on));
+  });
+  document.getElementById("printerTear").addEventListener("click", () => real.clearPrinter());
+  document.getElementById("printerSave").addEventListener("click", () => {
+    if (!text) return;
+    const blob = new Blob([text.replace(/\f/g, "\f\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "printout.txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  return {
+    update() {
+      const now = performance.now();
+      const v = real.printerVersion;
+      if (v !== shown) {
+        shown = v;
+        const next = real.printout();
+        if (next !== text) {
+          // A new printout (after an idle spell) brings the paper back to the print head.
+          if (now - lastChange > 1500) follow = true;
+          lastChange = now;
+        }
+        text = next;
+        draw(true);
+      }
+      // "printing" while characters keep coming; the head goes away after a pause.
+      const printing = now - lastChange < 1500;
+      const label = !on ? "off" : printing ? "printing…" : text ? "ready" : "idle";
+      if (stateEl.textContent !== label) {
+        stateEl.textContent = label;
+        if (!printing) draw(false);
+      }
+    },
+  };
 }
 
 // Draw the real system's decoded screen: black on white, with white-on-black cells (the title

@@ -88,6 +88,8 @@ pub struct CptPrinter {
     /// On by default, like an operator who always feeds the next page.
     pub auto_sheet: bool,
     idle_reads: u32,
+    /// Any command received yet (so there is a page to change; the log may have been taken).
+    printed: bool,
     /// Sheets loaded (by `auto_sheet` or [`CptPrinter::load_sheet`]).
     pub sheets: u64,
 }
@@ -105,6 +107,7 @@ impl CptPrinter {
             status_reads: 0,
             auto_sheet: true,
             idle_reads: 0,
+            printed: false,
             sheets: 0,
         }
     }
@@ -138,7 +141,7 @@ impl Device for CptPrinter {
         if port == self.base + 1 {
             self.status_reads += 1;
             let s = self.status;
-            if self.auto_sheet && self.status & STATUS_ON != 0 && !self.log.is_empty() {
+            if self.auto_sheet && self.status & STATUS_ON != 0 && self.printed {
                 self.idle_reads += 1;
                 if self.idle_reads >= SHEET_IDLE_READS {
                     self.idle_reads = 0;
@@ -156,6 +159,7 @@ impl Device for CptPrinter {
         if port == self.base {
             // A strobe is a line going high.
             let rising = val & !self.control & STROBE_MASK;
+            self.printed |= rising != 0;
             if rising != 0 && self.log.len() < LOG_LIMIT {
                 let word = u16::from_be_bytes(self.data);
                 self.log.push(PrinterCommand { strobe: rising, word });

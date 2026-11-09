@@ -60,11 +60,43 @@
       .footnote a {
         color: inherit; /* underlined, as links are by default */
       }
-      /* Display and drive bays side by side. */
+      /* The screen on the left; on its right the drives, keys and power, with the printer
+         beneath them filling the rest of the screen's height. */
       .workstation {
-        display: flex;
-        align-items: stretch;
-        gap: 16px;
+        display: grid;
+        grid-template-columns: auto auto;
+        grid-template-rows: auto 1fr;
+        column-gap: 16px;
+        row-gap: 18px;
+        align-items: start;
+      }
+      .workstation > .case {
+        grid-column: 1;
+        grid-row: 1 / span 2;
+      }
+      .workstation > .right-panel {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: start;
+      }
+      .workstation > .printer {
+        grid-column: 2;
+        grid-row: 2;
+        align-self: stretch;
+      }
+      /* Too narrow for the printer beside the screen: it goes below, across the full width. */
+      @media (max-width: 1560px) {
+        .workstation > .printer {
+          grid-column: 1 / -1;
+          grid-row: 3;
+          align-self: start;
+          justify-self: center;
+          width: min(100%, 980px);
+        }
+        .workstation > .printer .paper-feed {
+          flex: none;
+          height: 420px;
+        }
       }
       /* Two 8-inch drives side by side, top-aligned (leaving room beneath for keyboard keys). */
       .drives {
@@ -244,6 +276,83 @@
         box-shadow: 0 0 8px 2px rgba(60, 255, 90, 0.7), inset 0 0 2px rgba(200, 255, 210, 0.9);
       }
 
+      /* The printer: a dark housing with its controls, and the paper coming out of it. */
+      .printer {
+        width: 640px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        background: linear-gradient(160deg, #3b3e43, #24262a);
+        border-radius: 14px;
+        padding: 12px 16px 16px;
+        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.08);
+      }
+      .printer-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .printer-name {
+        font: 700 13px system-ui, sans-serif;
+        letter-spacing: 3px;
+        color: #d8cfbb;
+        opacity: 0.85;
+        margin-right: auto;
+      }
+      .printer-state {
+        font: 12px "Courier New", monospace;
+        opacity: 0.75;
+        min-width: 16ch;
+        text-align: right;
+      }
+      /* The paper path: a dark slot the sheets scroll through. */
+      .paper-feed {
+        /* The printer's remaining height. A 0px basis (not 0%) keeps the text from sizing it,
+           so beside the screen the printer fills only the space under the keys. */
+        flex: 1 1 0px;
+        min-height: 240px;
+        overflow-y: auto;
+        background: #121416;
+        border-radius: 6px;
+        padding: 14px 0;
+        box-shadow: inset 0 6px 14px rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+      }
+      .paper-feed .empty {
+        margin: auto;
+        font: 13px system-ui, sans-serif;
+        opacity: 0.5;
+      }
+      /* One sheet: letter-size proportions at pica (10 characters per inch). */
+      .sheet {
+        background: #f7f5ee;
+        color: #1a1a1a;
+        width: 86ch;
+        min-height: 20em;
+        /* Grow with the text: in the paper feed's flex column a sheet would otherwise shrink
+           to the window's height and clip its text, leaving nothing to scroll. */
+        flex-shrink: 0;
+        padding: 0 2ch 2em;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+        font: 11px/1.25 "Courier New", monospace;
+        white-space: pre;
+        overflow: hidden;
+      }
+      /* The print head: a small block after the last character struck, while printing. */
+      .print-head {
+        display: inline-block;
+        width: 0.6ch;
+        height: 1em;
+        margin-left: 1px;
+        vertical-align: text-bottom;
+        background: #b33a2a;
+      }
+
       /* The one blank position keeps the grid shape but isn't a button. */
       .key.blank {
         background: #1b1d20;
@@ -290,6 +399,23 @@
           <button class="power-btn" id="resetBtn" title="reset: boot again from the disk in drive 1">RESET</button>
         </div>
       </div>
+
+    <!-- Printer A: what PRINT sends, struck line by line as the CPT prints it. -->
+    <section class="printer" aria-label="printer">
+      <div class="printer-top">
+        <div class="printer-name">PRINTER A</div>
+        <span class="printer-state" id="printerState" aria-live="polite">idle</span>
+        <button class="power-btn" id="printerPower" title="printer power" aria-pressed="true">
+          <span class="led power-led on"></span>
+          <span>ON</span>
+        </button>
+        <button class="power-btn" id="printerTear" title="tear off the printout (clear it)">TEAR OFF</button>
+        <button class="power-btn" id="printerSave" title="save the printout as a text file">SAVE</button>
+      </div>
+      <div class="paper-feed" id="paperFeed" tabindex="0" aria-label="printout">
+        <div class="empty">Nothing printed yet. Bring in a document (IN), then PRINT and RETURN.</div>
+      </div>
+    </section>
     </div>
 
     <div id="status">loading…</div>

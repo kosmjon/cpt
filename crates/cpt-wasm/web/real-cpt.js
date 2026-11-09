@@ -286,6 +286,28 @@ class RealCpt {
     return this.w.cpt_real_tone_hz();
   }
 
+  // The printer (printer A). `printerVersion` changes whenever more has been printed or the
+  // paper was cleared; `printout()` is everything printed so far as text (pages separated by
+  // a form feed). The printout outlives power off and reset, like paper.
+  get printerVersion() {
+    return this.w.cpt_real_printer_version();
+  }
+
+  printout() {
+    const len = this.w.cpt_real_printout();
+    const bytes = new Uint8Array(this.w.memory.buffer, this.w.cpt_xfer_ptr(), len);
+    return new TextDecoder().decode(bytes);
+  }
+
+  clearPrinter() {
+    this.w.cpt_real_printer_clear();
+  }
+
+  // Switch the printer on or off (off: the CPT reports "THE PRINTER SEEMS TO BE OFF.").
+  setPrinterOn(on) {
+    this.w.cpt_real_printer_set_on(on ? 1 : 0);
+  }
+
   // Drive state for the UI: { loaded, modified, active } for drive 0 (station 1) or 1.
   drive(d) {
     const s = this.w.cpt_real_drive_state(d);

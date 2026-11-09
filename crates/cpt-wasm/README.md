@@ -154,6 +154,7 @@ Checks without a browser, both using `disk/cpt.img` (skipped if it is missing):
 ```sh
 node crates/cpt-wasm/web/check-real.mjs   # real-cpt.js + wasm: start-up, keys, LEGAL
 node crates/cpt-wasm/web/check-page.mjs   # cpt.js on a fake DOM: insert, start, type, held-key repeat, eject, power
+node crates/cpt-wasm/web/check-print.mjs  # PRINT: the printout grows line by line, two pages, survives power off
 ```
 
 Exports: `cpt_real_insert(drive)`, `cpt_real_eject(drive)`, `cpt_real_start` (boot from
@@ -181,6 +182,28 @@ schedules them on one square-wave oscillator, timed by the emulated clock.
 `check-page.mjs` checks the chime's pitches and note lengths against a mock audio context.
 The earlier demo machine's melody (CODE + WORDPAK) is gone from the page with the demo; its
 audio path is still in the module and checked by `check-audio.mjs`.
+
+## The printer
+
+Below the workstation is printer A, the daisy-wheel printer on the CPT's parallel port (see
+`program-disk.md`, "The printer"). Bring in a document (IN), press PRINT and RETURN, and the
+document comes out on the paper line by line, at the pace the CPT sends it (about 110
+characters a second; the emulated printer is always ready). Each page is a sheet; the
+emulated printer loads the next sheet when the CPT asks for one. A red block marks the print
+head while it prints. When printing reaches the bottom of the paper window, the paper
+scrolls up to keep the line being printed in view. Scroll up to read and it stops following;
+scroll back down to the print head, or start a new print, and it follows again.
+
+- **ON / OFF** switches the printer. Off, the CPT says "THE PRINTER SEEMS TO BE OFF."
+- **TEAR OFF** clears the paper. **SAVE** downloads the printout as `printout.txt` (pages
+  separated by form feeds).
+- The printout stays through POWER and RESET, like paper.
+
+The module's side: after each run it moves the printer's commands to a log kept outside the
+system (`cpt_real_printer_version` changes when there is more), and `cpt_real_printout`
+renders the log as text into the transfer buffer, through the print-wheel table it reads
+from the system's memory. `cpt_real_printer_clear` and `cpt_real_printer_set_on` are the
+buttons. Bold, underline and the wheel's special characters print as plain characters.
 
 How it works:
 - `cpt_run_frame` leaves the frame's speaker events in a buffer of f64 pairs (CPU cycle,

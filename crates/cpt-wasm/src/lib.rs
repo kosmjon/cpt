@@ -501,6 +501,7 @@ pub extern "C" fn cpt_real_halt() {
         if let Some(mut sys) = r.borrow_mut().take() {
             let disks = sys.take_disks();
             PARKED.with(|p| *p.borrow_mut() = disks);
+            PAPER.with(|p| p.borrow_mut().close());
         }
     });
 }
@@ -517,6 +518,9 @@ pub extern "C" fn cpt_real_start() -> u32 {
         let mut sys = CptSystem::boot_disk(disk, cpt_machine::cpt_system::READ_DELAY_CYCLES);
         if let Some(second) = p[1].take() {
             sys.floppy().mount(1, second);
+        }
+        if PAPER.with(|p| p.borrow().printer_off) {
+            sys.printer().status = 0;
         }
         REAL.with(|r| *r.borrow_mut() = Some(sys));
         1
@@ -535,6 +539,131 @@ pub extern "C" fn cpt_real_run(cycles: f64) {
     REAL.with(|r| {
         if let Some(sys) = r.borrow_mut().as_mut() {
             sys.exec.run_cycles(cycles.max(0.0) as u64);
+            // What the printer got goes to the paper, which outlives the system (power off and
+            // reset keep the printout). The print-wheel table is read from memory once, the
+            // first time a character arrives.
+            let new = sys.printer().take_log();
+            if !new.is_empty() {
+                PAPER.with(|p| {
+                    let mut p = p.borrow_mut();
+                    if p.wheel.is_none() && new.iter().any(|c| c.strobe & STROBE_CHARACTER != 0) {
+                        p.wheel = find_wheel(sys);
+                    }
+                    p.commands.extend(new);
+                    p.version += 1;
+                });
+            }
+        }
+    });
+}
+
+// The printer (printer A, the daisy-wheel port at 42H/43H; see cpt_machine::cpt_printer):
+// - `cpt_real_printer_version()` changes whenever more has been printed (or the paper is
+//   cleared), so the page re-renders only then.
+// - `cpt_real_printout()` renders everything printed as plain text into the transfer buffer
+//   (UTF-8; pages end with a form feed) and returns its length.
+// - `cpt_real_printer_clear()` tears the paper off; `cpt_real_printer_set_on(0/1)` switches
+//   the printer off or on (off reads as no printer: "THE PRINTER SEEMS TO BE OFF.").
+
+use cpt_machine::cpt_printer::{render_text, STATUS_READY, STROBE_CHARACTER};
+use cpt_machine::{PrintWheel, PrinterCommand};
+
+/// The printout so far: the commands of earlier systems (each rendered with its own wheel
+/// table) and of the running one.
+#[derive(Default)]
+struct Paper {
+    /// Text printed by systems that have since been stopped.
+    earlier: String,
+    commands: Vec<PrinterCommand>,
+    wheel: Option<PrintWheel>,
+    version: u32,
+    printer_off: bool,
+}
+
+thread_local! {
+    static PAPER: RefCell<Paper> = RefCell::new(Paper::default());
+}
+
+/// The print-wheel table the driver uses, from the system's memory (blocks of 8000H-FFFFH).
+fn find_wheel(sys: &mut CptSystem) -> Option<PrintWheel> {
+    use i8080_cpu::Bus;
+    let m = &mut sys.exec.machine;
+    let keep = m.selected_block();
+    let mut found = None;
+    for b in 0..m.mem.block_count() {
+        m.mem.select_block(b);
+        let block: Vec<u8> = (0x8000u32..0x10000).map(|a| m.read(a as u16)).collect();
+        found = PrintWheel::find(&block);
+        if found.is_some() {
+            break;
+        }
+    }
+    m.mem.select_block(keep);
+    found
+}
+
+impl Paper {
+    fn current_text(&self) -> String {
+        match &self.wheel {
+            Some(w) => render_text(&self.commands, w),
+            None => String::new(),
+        }
+    }
+
+    /// The running system stops: keep what it printed as text.
+    fn close(&mut self) {
+        let text = self.current_text();
+        if !text.is_empty() {
+            if !self.earlier.is_empty() && !self.earlier.ends_with('\u{0C}') {
+                self.earlier.push('\u{0C}');
+            }
+            self.earlier.push_str(&text);
+        }
+        self.commands.clear();
+        self.wheel = None;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_printer_version() -> u32 {
+    PAPER.with(|p| p.borrow().version)
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_printout() -> usize {
+    let text = PAPER.with(|p| {
+        let p = p.borrow();
+        let now = p.current_text();
+        if p.earlier.is_empty() {
+            now
+        } else if now.is_empty() {
+            p.earlier.clone()
+        } else {
+            format!("{}\u{0C}{}", p.earlier.trim_end_matches('\u{0C}'), now)
+        }
+    });
+    let bytes = text.into_bytes();
+    let len = bytes.len();
+    XFER.with(|x| *x.borrow_mut() = bytes);
+    len
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_printer_clear() {
+    PAPER.with(|p| {
+        let mut p = p.borrow_mut();
+        p.earlier.clear();
+        p.commands.clear();
+        p.version += 1;
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn cpt_real_printer_set_on(on: u32) {
+    PAPER.with(|p| p.borrow_mut().printer_off = on == 0);
+    REAL.with(|r| {
+        if let Some(sys) = r.borrow_mut().as_mut() {
+            sys.printer().status = if on == 0 { 0 } else { STATUS_READY };
         }
     });
 }

@@ -1147,6 +1147,8 @@ then two bytes per code, sent complemented. Both disks use the last (from 20H, 9
   saves it, `--printer-log <file>` saves the raw commands, `--printer-status 00` unplugs it.
 - `--watch-io 42-45` logs every IN and OUT on those ports with the instruction that did it
   (added to trace this).
+- The browser page has a printer pane that shows the printout growing line by line, with
+  ON/OFF, TEAR OFF and SAVE (see `crates/cpt-wasm/README.md`, "The printer").
 
 Example: `{3D}rc-l1{14}{ms 8000}{7D}{ms 3000}{14}` (IN RC-L1, PRINT, RETURN) prints the
 two-page letter to Carl Wales on cpt.img (boot test

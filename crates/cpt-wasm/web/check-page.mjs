@@ -47,6 +47,13 @@ function el(tag = "div") {
     setAttribute: (n, v) => (e.attrs[n] = String(v)),
     getAttribute: (n) => (n in e.attrs ? e.attrs[n] : null),
     appendChild: (c) => e.children.push(c),
+    append: (...cs) => e.children.push(...cs),
+    replaceChildren: (...cs) => (e.children = cs),
+    scrollTop: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+    style: {},
+    getBoundingClientRect: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
     click: () => e.dispatch("click"),
     querySelector: (sel) => e.sub[sel],
     sub: {},
@@ -92,7 +99,17 @@ const specialKeys = el();
 const powerBtn = el("button");
 powerBtn.sub[".led"] = el();
 const resetBtn = el("button");
-const byId = { screen: canvas, status, fileInput, specialKeys, powerBtn, resetBtn };
+// The printer pane.
+const printerPower = el("button");
+printerPower.sub[".led"] = el();
+printerPower.sub["span:last-child"] = el();
+const paperFeed = el();
+paperFeed.sub[".empty"] = el();
+const printerState = el();
+const byId = {
+  screen: canvas, status, fileInput, specialKeys, powerBtn, resetBtn,
+  printerPower, printerTear: el("button"), printerSave: el("button"), paperFeed, printerState,
+};
 const drives = [0, 1].map(() => {
   const d = el();
   d.sub[".led"] = el();
