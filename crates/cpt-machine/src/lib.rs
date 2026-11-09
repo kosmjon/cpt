@@ -310,12 +310,16 @@ impl Bus for Machine {
             self.mem.select_block(index);
             return;
         }
-        if let Some(i) = self.device_index_for_port(port) {
+        let owner = self.device_index_for_port(port);
+        if let Some(i) = owner {
             self.devices[i].io_out(port, val);
             self.service_dma(i);
-            return;
+        } else {
+            // Unmapped port: record it so we can discover the real port map later, but don't crash.
+            self.unmapped_io.push((port, val));
         }
-        // Unmapped port: record it so we can discover the real port map later, but don't crash.
-        self.unmapped_io.push((port, val));
+        for d in &mut self.devices {
+            d.observe_out(port, val);
+        }
     }
 }

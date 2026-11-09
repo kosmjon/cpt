@@ -399,8 +399,10 @@ Functions identified so far:
 The second program disk, cpt2489 (with TTY), has its own map, in hex and decimal, in
 [segments-cpt2489.md](segments-cpt2489.md). It adds segment 43 (2BH), serial communications
 through an 8251 USART at 4AH/4BH (receive on RST 1, transmit on RST 4). The emulator models the
-8251, and `cpt-run --serial-listen` connects it to a terminal. TTY mode itself doesn't work
-yet; the known issues and next steps are in that document.
+8251, and `cpt-run --serial-listen` connects it to a terminal. TTY mode works: reception to the screen or
+to a document, and transmission from the keyboard ("Using TTY mode" in that document). The
+emulator's 8251 holds its transmit request off until `10H` is written to port 00H; without that,
+TTY mode corrupted its own control block.
 
 The system's own entry points are a jump table at 0040H–006CH. For example: 0040H start-up
 (0D98H), 0046H the far-call dispatcher, 0052H yield (1143H), 0058H wait (11B4H), 005BH
@@ -491,7 +493,7 @@ CODE + a letter opens the CPT's menus and modes, seen on the title line:
 | CODE + M | 2F | inserts a format line (a ruler) |
 | CODE + X | 2B | changes the case of the character under the cursor |
 | CODE + backspace | 1A | the cursor back to column 1 |
-| CODE + I, K | 27, 33 | segment 2B, not present |
+| CODE + I, K | 27, 33 | segment 2B, not on this disk. On the TTY disk (cpt2489) CODE + I loads a control page (`CTTY` turns communications on) and CODE + K opens the communications menu |
 | CODE + D, E, V, W | 3B, 3C, 25, 31 | nothing visible yet |
 
 Two features this disk doesn't have:

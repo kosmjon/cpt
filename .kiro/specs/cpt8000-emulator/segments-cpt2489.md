@@ -146,11 +146,16 @@ EVEN PARITY
   - The transmitter is **RST 4** (1EB1H). It sends a priority byte (ctl+37H) first, then a
     4-byte ring (pointer at ctl+2EH).
   - Code that queues a byte writes `10H` to port 00H. The TX handler writes `10H` only after
-    it has sent a byte. So a port-00H write is an end-of-interrupt that re-arms the level,
-    which fits every handler writing its own bit there [HYPOTHESIS for the controller chip].
+    it has sent a byte. So a port-00H write is an end-of-interrupt that re-arms the level
+    [HYPOTHESIS for the controller chip]. **The CPT depends on it** [CONFIRMED by running]:
+    without the hold-off, TTY mode corrupts its own control block (see "The transmit
+    interrupt storm" below). Not every handler writes its bit, though: the display retrace
+    (RST 6) writes `40H` only a few times per boot, so the hold-off is modelled for the 8251's
+    transmitter only.
 - **Received characters reach the receive buffer at 3200H**, still with their parity bits
   (`48 C5 CC CC CF` for `HELLO`).
-- What doesn't work yet is listed under "Communications: known issues and next steps" below.
+- **TTY works in the emulator** [CONFIRMED by running, 2026-11-03]: reception to the screen and
+  to a document, and transmission from the keyboard. See "Using TTY mode" below.
 
 ### The emulator's 8251
 
@@ -160,7 +165,10 @@ EVEN PARITY
 - Status bits are the 8251's: TxRDY, RxRDY, TxEMPTY, PE, OE, FE, and DSR (on while a terminal
   is attached).
 - Characters take their line time at 1200 baud by default.
-- Both interrupt lines are level-sensitive. TxRDY is masked by TxEN, as on the real chip.
+- RxRDY is a plain level. TxRDY (masked by TxEN and CTS, as on the real chip) requests RST 4
+  once, then is held off until `10H` is written to port 00H (`Usart8251::cpt`, through the
+  new `Device::observe_out` hook, which lets a device see writes to other devices' ports).
+  `Usart8251::new` keeps a plain level.
 - Received characters wait until the CPU has read the previous one, so a pasted burst
   doesn't overrun. Characters that arrive while the receiver is off are lost.
 
@@ -214,35 +222,79 @@ port, and `--watch 3200-32FF`. For each byte:
 Slots 0118H and 011EH (to 18F1H and 18F5H) belong to something else and are called from
 block 1 code around 8348H–9669H.
 
-### Communications: known issues and next steps
+### Using TTY mode [CONFIRMED by running, 2026-11-03]
 
-Status: the chip level works. The CPT sets up the 8251, both interrupts run, its first two
-bytes reach a TCP client, and the client's bytes reach the CPT's receive buffer
-[CONFIRMED by running it, 2026-11-03]. Several earlier "TTY doesn't work" findings were
-symptoms of a CPU bug, now fixed (next subsection). With the fix, received text reaches the
-screen, but the glyphs are wrong, so TTY mode still isn't usable.
+1. **CODE + I, `ctty`, RETURN** loads the control page. Wait about 8 s: the title shows
+   `TTY COMMUNICATIONS ENABLED`. The transmitter is left on (command 37H) with nothing to
+   send. Nothing is sent at start-up.
+2. **Reception defaults to the screen.** Text from the line appears below the typing line,
+   parity stripped, one line per CR: `HELLO` CR LF `second` CR LF shows as two lines.
+3. **CODE + K** opens `COMMUNICATIONS:  Stop Select Status`. A CODE + K pressed while the set-up
+   is still running (3 s after `ctty`) is ignored.
+4. Menus show on the title line. **Typing an item's letter does nothing. SPACE moves the
+   highlight and RETURN picks it.** Where the highlight starts:
+   - COMMUNICATIONS starts on Select: RETURN gives SELECTION. (Once a reception is running,
+     it reopens on the item used last.)
+   - SELECTION starts on Transmission: RETURN gives TRANSMISSION. SPACE then RETURN gives
+     RECEPTION.
+   - TRANSMISSION (`KB KB+Screen Screen Disk`) starts on KB.
+   - RECEPTION (`None Screen Disk`) starts on None.
+5. **Transmission, KB:** what is typed afterwards is sent as 7-bit ASCII with even parity made
+   by the software, RETURN as CR. `hello` RETURN sends `E8 65 6C 6C 6F 8D` (`h` and CR get the
+   parity bit). The text is also typed into the document.
+6. **Reception, Disk** (SPACE RETURN twice from SELECTION) asks `FILE NAME:` with the station
+   digit, then shows `RECEPTION IN PROCESS`. What arrives is filed as that document. LF is
+   dropped and CR kept as the CPT's new line: `HELLO` CR LF `second` CR LF became
+   `{01}RXTEST{02}HELLO{0D}second{0D}{0D}{03}` (23 bytes, the directory's length field 17H).
+7. **Disk reception ends by itself** about 25 s after the last character: the title becomes
+   `RECEPTION STOPPED` and the document is on the disk [HYPOTHESIS: an idle-line timeout;
+   whether a control-page field sets it is unknown].
 
-**The EI bug and what it explained**
+Boot tests: `tty_communications_set_up_the_8251_and_receive`,
+`tty_transmission_from_the_keyboard_sends_what_is_typed`, `tty_reception_to_disk_files_a_document`.
 
-The 8080's `EI` enables interrupts only after the *next* instruction completes. The CPU core
-enabled them at once. With a level-sensitive line (the 8251's TxRDY), a handler ending in
-`EI; RET` was interrupted again before the `RET`, so the stack grew without bound and
-overwrote the comm control block flags at 2D3CH–2D3FH. The fix is in
-`crates/i8080-cpu/src/lib.rs` (`ei_pending`; `DI` right after `EI` leaves interrupts off).
-Tests: `i8080-cpu/tests/interrupts.rs`, `cpt-machine/tests/level_interrupt.rs`.
-Effects of the fix, all [CONFIRMED by running]:
+### The transmit interrupt storm (the cause of the earlier wrong glyphs)
 
-- The start-up sends just `04`. The old `04 4E` was stack garbage.
-- The `@O>>^` junk on the typing line is gone.
-- CODE + K after enabling TTY shows `COMMUNICATIONS:  Stop Select Status`.
-- Received bytes now appear on the screen (4 lines of wrong glyphs for "hello world",
-  CR, "second line", CR sent with even parity).
+Before the fix, the emulator's 8251 requested RST 4 for as long as TxRDY was set, as a plain
+level. The CPT's TX handler (1EB1H) returns without writing `10H` when it has nothing to send,
+expecting the request to stay off. With the plain level the request came back after every
+`EI; RET`, so the interrupted code never moved on. Traced with `--watch` and breakpoints:
 
-**The communications menus**
+1. The timer handler (116FH) enables interrupts at its first instruction. It was interrupted
+   at 1171H by RST 4 again and again, so it never finished.
+2. Each new timer tick nested another timer handler on top, and the stack grew by one frame
+   per tick (frames `1171 / 0046 / 0972 / 094E` repeating).
+3. That stack was the TTY task's, in page 2E00H (SP about 2E02H when the storm began, 2D51H
+   0.2 s later). It ran down into page 2D00H, which the comm segment had just allocated (via
+   the page allocator at 0F72H, cleared at EC10H) as its control block (pointer at 0572H).
+4. The overwritten control block explained every symptom:
+   - ctl+5DH holds the reception code-set pointers, indexed by the shift state at ctl+FBH
+     (E6A3H). Both were stack words (state 1FH, pointer 0146H), so each received byte went
+     through a table at 0146H: `A` (41H) became 16H. Those were the wrong glyphs.
+   - The send ring pointer (ctl+2EH) pointed at garbage: the start-up "sent" `04` (and
+     `04 4E` before the EI fix) was stack data, not an EOT handshake.
+   - The overflow and break messages (11.23, 11.20) and the stray `8` on the typing line.
+5. With the request held off until `10H` on port 00H, the reception tables at 2F00H/3100H are
+   the ones used, and all of these are gone.
 
-Prompts in the resident table (block 0, B6E8H) and their code in block 1. The prompts show
-that received text can go to the screen or to disk, and that sending can come from the
-keyboard, the screen or disk.
+The code-set tables, for reference [CONFIRMED in memory after enabling]:
+
+- The `CTTY` page (`SAMPLE ASYNC CONTROL PAGE 1200 BAUD`) names `TRANSMISSION CODE SET: 1
+  C-ASCII.T`, `RECEPTION CODE SET: 1 C-ASCII.R`, `RATE: 1200`, `LINES PER PAGE: 70` and
+  `EVEN PARITY`. CODE + I loads both tables. Nothing else needs to load them.
+- **3100H is the transmission table** (`C-ASCII.T`: its `CODES 90-99` line
+  `090,091,000,093,095,196,096…` matches 3100H+5AH). **2F00H is the reception table**,
+  presumably `C-ASCII.R` [VERIFY: only its lines for 0–29 were read from the disk]. Both
+  pass 00H–8FH through unchanged, except a few punctuation codes.
+- Table documents are lines `CODES  lo- hi:  ddd,ddd,…` (decimal, ten per line; `000` means no
+  code). `C-ASCII.T1` is a modified copy (code 13 → 000; 250–255 → `000,000,000,000,254,127`).
+  `C-ASCII.T2` is a *string* table (`CODES 0-9: 013,005,013,010,000,…`), probably CR → CR ENQ
+  CR LF [HYPOTHESIS]. Using them would mean editing the code-set lines of a control page
+  [HYPOTHESIS].
+
+### The communications menus
+
+Prompts in the resident table (block 0, B6E8H) and their code in block 1:
 
 | Prompt | Id | Code (block 1) |
 |---|---|---|
@@ -262,96 +314,60 @@ keyboard, the screen or disk.
 CHARACTER LENGTH/PARITY, WRAPAROUND, AUTOMATIC NEW LINE, BLACK-ON-WHITE and TEXT UP CR
 TRANSLATION (0470, 0471, 0473–0476) are not referenced by any code found.
 
-**Known issues: the CPT side (the protocol)**
+The receive path, for reference: DE42H gets a character (B) through 012AH; DEDAH masks it
+with ctl+08H (7FH) and checks parity by ctl+09H; E1F6H → E0A1H → E12EH; E37BH handles the
+control codes (0EH/0FH shift out/in, 10H, 1BH, 05H, 07H) and translates through E6A3H; E24CH
+puts it on the line.
 
-1. **Received text reaches the screen with wrong glyphs.** Bytes land in the receive queue at
-   3200H with parity bits, and the consumer (DE42H, per-character handler DEDAH) drains them
-   at once [CONFIRMED with `cpt-run --watch`]. The translation between queue and screen is
-   wrong or unknown. Not yet tried: choosing Reception = Screen or Disk in the menus. Filing
-   to a document is untested.
-2. **Typed text isn't sent** [needs retest after the EI fix]. Before the fix the transmitter
-   stayed off (command `16H`). Writes at E92DH, E93EH, E944H (4CH), E9E6H and E9FEH would
-   change the command. Try Select, Transmission, KB.
-3. **The start-up handshake** is just `04` (EOT) now. The old `{04}N` was an artifact.
-4. **The `@O>>^` typing-line junk** is gone, so FEH and B7H need no rules for it.
-5. **CODE + K** now shows the Stop/Select/Status menu, so the menus above are reachable.
-6. **Parity handling is unknown.** The receive path can strip bit 7 (`ANI 7FH`). Whether it
-   also checks parity, and rejects or marks bad characters, hasn't been traced. Telnet
-   clients send 8-bit data with no parity bit.
-7. **4CH's meaning is a guess.** `00` is written at reset, then `09` with `RATE: 1200`,
+### Communications: open questions
+
+**The CPT side**
+
+1. **Stop, Status, and the other transmissions** (KB+Screen, Screen, Disk) haven't been tried.
+   Driving the menus blind is fiddly because COMMUNICATIONS reopens on the last item used.
+2. **What ends Disk reception after 25 s**, and whether the control page sets it.
+3. **Parity errors.** DEDAH computes a parity-error flag (E) from ctl+09H. What the CPT does
+   with a bad character hasn't been traced. Telnet clients send 8-bit data with no parity bit.
+4. **4CH's meaning is a guess.** `00` is written at reset, then `09` with `RATE: 1200`,
    probably a baud-rate select. The model records it but always runs at 1200 baud.
-8. **Port 00H as end-of-interrupt is a hypothesis.** It fits every handler writing its own
-   bit there, and the TX code re-arming with 10H. The emulator's `InterruptAck` only logs the
-   writes. It doesn't block a level until its end-of-interrupt, and device priority is just
-   the order devices are attached (the 8251 is last). If the CPT relies on the controller
-   holding a level off, transmit could behave differently from the real machine.
-9. **The other control-page fields** (`LINES PER PAGE: 70`, the code-set numbers) haven't
-   been tried with other values. Nor have the other likely control documents: `CONTROL`,
-   `C-ASCII.T1`, `C-ASCII.T2`, and `WN` (`WORDNET. RATE: 9600`).
+5. **The rest of the interrupt controller.** The hold-off is modelled for the 8251's
+   transmitter only, and device priority is the order devices are attached (the 8251 last).
+   The other handlers' port-00H writes (20H, 80H, 08H, 04H, 02H) are only logged.
+6. **The other control-page fields** (`LINES PER PAGE: 70`, the code-set numbers) haven't been
+   tried with other values. Nor have the other control documents: `CONTROL`
+   (`CONTROL PAGE FOR MAILBOX`, `TRANSMISSION FROM KP/SCREEN`, `TRANSMISSION FILE: 2 MAILBOX`)
+   and `WN` (`WORDNET. RATE: 9600`).
 
-**Known issues: the emulator side**
+**The emulator side**
 
 1. **No interactive CPT keyboard in a terminal session.** `cpt-run` only types its `--keys`
-   script. During a `--serial-listen` session you can't type on the CPT keyboard, only on the
-   terminal.
+   script. During a `--serial-listen` session you can type on the terminal only.
 2. **The Telnet server suppresses local echo.** It sends `WILL ECHO`, so the client doesn't
-   echo locally, and the CPT doesn't echo back either. Typing on the terminal is therefore
-   blind. `--serial-raw` avoids the negotiation, but most clients then need local echo turned
-   on by hand.
+   echo locally. `--serial-raw` avoids the negotiation, but most clients then need local echo
+   turned on by hand.
 3. **No parity or CR/LF translation for the terminal.** The terminal's bytes arrive as sent,
-   with no even-parity bit and Enter as CR (or CR LF). The CPT expects 7 data bits with even
-   parity.
+   with no even-parity bit and Enter as CR (or CR LF).
 4. **`--serial-listen` blocks before boot** until a client connects, and the run ends when
    the client disconnects.
 5. **Receiver pacing hides overruns.** A character starts only after the CPU has read the
-   last one, so the CPT's XOFF path (sent when its buffer fills) is never exercised the way a
-   fast host would exercise it.
-6. **Modem signals are simplified.** DSR is on whenever a terminal or script is attached,
-   and CTS is always on. DTR and RTS from the command register aren't passed to the host.
-7. **`--live`** redraws at most twice a second, only while the serial port is active, as a
-   full redraw.
-8. **The browser has no serial connection.** A page can't open a TCP socket. The device
-   runs in the wasm build with nothing attached.
+   last one, so the CPT's XOFF path is never exercised the way a fast host would exercise it.
+6. **Modem signals are simplified.** DSR is on whenever a terminal or script is attached, and
+   CTS is always on. DTR and RTS aren't passed to the host.
+7. **`--live`** redraws at most twice a second, only while the serial port is active.
+8. **The browser has no serial connection.** The device runs in the wasm build with nothing
+   attached.
 
-**Suggested next steps** (in order)
+**Suggested next steps**
 
-1. **Trace the per-character handler.** The memory watchpoint is done (`cpt-run --watch`) and
-   found the consumer: the comm segment's service routine at DE42H (block 1), which calls
-   the driver's get-character entry (012AH) and, for each character, a handler at DEDAH.
-   Disassemble DEDAH–DF6CH (it runs the character through the reception code set and then
-   somewhere) and watch what it writes, with `--watch` on the control block (2D00H–2D3FH)
-   and on any buffer it fills. This answers issue 1.
-2. **Explore the menus** with CODE + K: Select, Reception, Screen / Disk, and Select,
-   Transmission, KB / KB+Screen / Screen / Disk. Check whether typed text is sent and whether
-   Disk reception files a document. Then find the glyph problem (reception code set
-   C-ASCII.R, parity stripping at ctl+09 / `ANI 7FH`).
-2b. **Find what turns the transmitter on.** Break at E92DH, E93EH, E9E6H and E9FEH to
-   see which key or event reaches them. Try CODE + I and CODE + K followed by the function
-   keys (PRINT, OUT, RETURN, the staple key) in TTY mode. This answers issue 2.
-3. **Map segment 43's six functions** from the editor's calls (2B.00, 01, 03, 04, 05, 07 at
-   D61DH–D6ADH) to keys, the way the editor's dispatch table was mapped.
-4. **Answer the `{04}N` handshake.** Try likely host replies with `--serial-in`, with even
-   parity: ACK (`06`), ENQ (`05`), XON (`11`), EOT (`84`), `Y`, `N`. Watch whether the CPT
-   turns the transmitter on or files text. This answers issue 3.
-5. **Decode the TTY status line.** Dump the display page behind the typing line after
-   set-up and add rules for FEH and B7H to `cpt_display`. This answers issue 4.
-6. **Find where `09` for 4CH comes from**, likely a table indexed by the `RATE:` value. That
-   gives the baud-rate table, and the model can then run at the rate the CPT chose. This
-   answers issue 7.
-7. **Terminal comfort in `cpt-run`:**
-   - `--serial-parity even` adds the parity bit to the terminal's bytes and strips it from
-     the CPT's.
-   - `--serial-echo` stops the Telnet server from claiming echo.
-   - CR / CR LF options.
-   - Forwarding console keystrokes to the CPT keyboard, so a session needs no key script.
-   
-   These answer emulator issues 1–3.
-8. **Model the interrupt controller's in-service state**, but only if tracing shows the CPT
-   depends on it. This answers issue 8.
-9. **A browser serial connection** (later): a small WebSocket-to-TCP bridge in `run-web.bat`,
-   or a terminal pane in the page attached to the wasm `Usart8251`.
-10. **Once filing works:** a boot test that receives a short text and finds it in the
-    document, and one that types text on the CPT and checks it on the line.
+1. **Try Stop and Status**, and the Screen and Disk transmissions (DISK TRANSMISSION asks
+   Reselect/Continue; PROCEDURE asks Begin/Wait for signal).
+2. **Terminal comfort in `cpt-run`:** `--serial-parity even` (add the parity bit to the
+   terminal's bytes), `--serial-echo`, CR / CR LF options, and forwarding console keystrokes
+   to the CPT keyboard. These answer emulator issues 1–3.
+3. **Find where `09` for 4CH comes from**, likely a table indexed by the `RATE:` value, so the
+   model can run at the rate the CPT chose.
+4. **A browser serial connection:** a WebSocket-to-TCP bridge in `run-web.bat`, or a terminal
+   pane in the page attached to the wasm `Usart8251`.
 
 The editor's far calls to 2B: 2B.07 (D61DH), 2B.04 (D647H), 2B.00 (D665H), 2B.01 (D67DH),
 2B.05 (D6A7H) and 2B.03 (D6ADH), all from segment 23 in block 2.

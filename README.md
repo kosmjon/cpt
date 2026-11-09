@@ -168,15 +168,18 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   document named on the typing line).
 - **Keys:** the CPT's own auto-repeat for the keys on its repeat list.
 - **The speaker:** the start-up chime and key clicks.
-- **The TTY disk:** CODE + I, `ctty` turns communications on. The 8251 is set up, and bytes
-  go both ways over TCP.
+- **The TTY disk:** CODE + I, `ctty` turns communications on. Received text shows on the
+  screen, or (CODE + K, Select, Reception, Disk) is filed as a document. Transmission from
+  the keyboard sends what is typed, with even parity. Over TCP or with scripted input; see
+  `segments-cpt2489.md`, "Using TTY mode".
 
 #### Known gaps
 
 - **Unidentified keys:** INSERT, MOVE and WORDPAK. WORDPAK's segment isn't on these disks.
   ERASE (4FH) is a hypothesis.
-- **TTY protocol:** received text isn't filed into the document, and typed text isn't sent.
-  See `segments-cpt2489.md`, "Communications: known issues and next steps".
+- **TTY:** the Stop and Status menus and the Screen and Disk transmissions are untried, and
+  the browser has no serial connection. See `segments-cpt2489.md`, "Communications: open
+  questions".
 - **Disk utilities (Work Disk Duplication, Disk Erase, Work Disk Repair):** reached on the
   real machine with CODE + O and operation 5, 6 or 7. The `cpt2489` disk has their message
   text, but not their code, so these three operations aren't available from the disks we
@@ -295,9 +298,9 @@ Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`
 - **The emulator** boots and runs the real CPT software from the original program disks, on
   the command line and in a browser. Most editing features work (see "What works on the
   real system").
-  - The open work is the unidentified keys, the TTY protocol, printing and the character
+  - The open work is the unidentified keys, the rest of TTY, printing and the character
     ROM.
-  - `cargo test --workspace` runs 352 tests with no warnings. The real-disk boot tests skip
+  - `cargo test --workspace` runs 355 tests with no warnings. The real-disk boot tests skip
     themselves unless `setup-disks.bat` has made `disk/cpt.img` and `disk/cpt2489.img`.
   - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
 - **The assembler** front end and code generation are working and tested for the confirmed

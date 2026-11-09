@@ -8,9 +8,9 @@
 //!   command `37H` (TxEN, DTR, RxE, error reset, RTS). It writes `00`, then `09`, to 4CH.
 //! * The receiver interrupts on **RST 1** (handler 1DD8H: acknowledges 02H on port 00H, checks
 //!   RxRDY, reads 4BH, checks the overrun and framing bits 30H).
-//! * The transmitter interrupts on **RST 4** (handler 1EB1H: acknowledges 10H, checks TxRDY,
-//!   writes the next byte to 4BH; with nothing left to send it writes command 16H, turning
-//!   TxEN off so the interrupt stops).
+//! * The transmitter interrupts on **RST 4** (handler 1EB1H: checks TxRDY, writes the next byte
+//!   to 4BH and then writes 10H to port 00H; with nothing to send it writes no 10H, and may
+//!   turn TxEN off with command 16H). The routine that queues a byte (DF4BH) writes 10H too.
 //!
 //! The model:
 //! * The control port follows the 8251's mode / sync-character / command sequence; internal
@@ -22,9 +22,14 @@
 //!   `EVEN PARITY`; the parity bit is made and checked by the software, the chip runs 8 data
 //!   bits without parity). 4CH's value is recorded; it is probably the baud-rate select (09
 //!   with `RATE: 1200`) [HYPOTHESIS], so it doesn't change the rate.
-//! * Both interrupt lines are level-sensitive, as the 8251's RxRDY and TxRDY pins are: RxRDY
-//!   while a received character waits (with RxE on), TxRDY while TxEN is on, CTS is asserted
-//!   and the holding register is empty.
+//! * RxRDY is level-sensitive: it requests RST 1 while a received character waits (with RxE
+//!   on). TxRDY (TxEN on, CTS asserted, holding register empty) requests RST 4 **once**; the
+//!   request is then held off until 10H is written to port 00H [HYPOTHESIS: the interrupt
+//!   controller holds the level in service until that write]. As a plain level, TxRDY with
+//!   nothing to send re-interrupted after every `EI; RET`, starving the timer handler (116FH,
+//!   which enables interrupts at once), so ticks nested until the stack ran from 2E00H down
+//!   through the comm control block at 2D00H. [`Usart8251::new`] keeps the plain level; the
+//!   CPT's [`Usart8251::cpt`] uses the acknowledge port.
 //! * Received characters are paced: the next one starts only after the CPU has read the last,
 //!   so a fast paste from the terminal doesn't overrun (as if the terminal were flow-controlled).
 //!   Characters that arrive while the receiver is off are lost, as on a real line.
@@ -86,6 +91,13 @@ pub struct Usart8251 {
     /// Interrupt vectors: receiver (RST 1) and transmitter (RST 4) on the CPT.
     pub rx_vector: Option<u8>,
     pub tx_vector: Option<u8>,
+    /// The interrupt acknowledge port. With one, the transmit request is taken once and then
+    /// held off until a write there with the transmit vector's bit (10H for RST 4) re-arms it.
+    /// Without one, TxRDY requests an interrupt for as long as it is set (a plain level).
+    ack_port: Option<u8>,
+    tx_armed: bool,
+    /// Transmit interrupts taken (for reports).
+    pub tx_interrupts: u64,
     /// Modem inputs: DSR (status bit 7) and CTS (gates the transmitter).
     dsr: bool,
     cts: bool,
@@ -121,6 +133,9 @@ impl Usart8251 {
             baud: DEFAULT_BAUD,
             rx_vector,
             tx_vector,
+            ack_port: None,
+            tx_armed: true,
+            tx_interrupts: 0,
             dsr: false,
             cts: true,
             tx_hold: None,
@@ -139,8 +154,15 @@ impl Usart8251 {
     }
 
     /// The CPT's serial port: 4AH-4CH, receive on RST 1, transmit on RST 4.
+    /// The transmit request is re-armed through the acknowledge port 00H.
     pub fn cpt() -> Self {
-        Usart8251::new(0x4A, Some(1), Some(4))
+        Usart8251::new(0x4A, Some(1), Some(4)).with_ack_port(0x00)
+    }
+
+    /// Hold the transmit request off after each interrupt until `port` gets the vector's bit.
+    pub fn with_ack_port(mut self, port: u8) -> Self {
+        self.ack_port = Some(port);
+        self
     }
 
     // --- host (terminal) side ---
@@ -357,12 +379,24 @@ impl Device for Usart8251 {
                 return Some(v);
             }
         }
-        if self.tx_hold.is_none() && self.tx_enabled() {
+        if self.tx_hold.is_none() && self.tx_enabled() && self.tx_armed {
             if let Some(v) = self.tx_vector {
+                if self.ack_port.is_some() {
+                    self.tx_armed = false;
+                }
+                self.tx_interrupts += 1;
                 return Some(v);
             }
         }
         None
+    }
+
+    fn observe_out(&mut self, port: u8, val: u8) {
+        if let (Some(ack), Some(v)) = (self.ack_port, self.tx_vector) {
+            if port == ack && val & (1 << v) != 0 {
+                self.tx_armed = true;
+            }
+        }
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

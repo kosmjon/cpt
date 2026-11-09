@@ -126,16 +126,41 @@ fn characters_arriving_with_the_receiver_off_are_lost() {
     assert_eq!(u.received, 0);
 }
 
+/// Without an acknowledge port, TxRDY is a plain level.
 #[test]
 fn the_transmit_interrupt_is_rst_4_while_txen_and_the_holding_register_is_empty() {
-    let mut u = Usart8251::cpt();
+    let mut u = Usart8251::new(0x4A, Some(1), Some(4));
     assert_eq!(u.take_irq(), None, "after power-up, nothing is enabled");
     set_up(&mut u);
     assert_eq!(u.take_irq(), Some(4));
+    assert_eq!(u.take_irq(), Some(4), "a level: it asks again until something is written");
     u.io_out(0x4B, b'1');
     assert_eq!(u.take_irq(), None, "the holding register is full");
     u.tick(1);
     assert_eq!(u.take_irq(), Some(4), "double-buffered: ready for the next while one is sent");
+}
+
+/// The CPT's 8251: the transmit request is taken once, then held off until 10H (RST 4's bit)
+/// is written to the acknowledge port 00H. The CPT's handler writes 10H only after sending a
+/// byte, and its queueing routine writes it when there is a new byte.
+#[test]
+fn the_cpt_transmit_request_waits_for_10h_on_port_00h() {
+    let mut u = Usart8251::cpt();
+    set_up(&mut u);
+    assert_eq!(u.take_irq(), Some(4));
+    assert_eq!(u.take_irq(), None, "held off: nothing to send, so no 10H yet");
+    u.observe_out(0x00, 0x80);
+    assert_eq!(u.take_irq(), None, "another level's acknowledge doesn't re-arm it");
+    u.observe_out(0x01, 0x10);
+    assert_eq!(u.take_irq(), None, "nor does 10H to another port");
+    u.observe_out(0x00, 0x10);
+    assert_eq!(u.take_irq(), Some(4), "10H on 00H re-arms it");
+    u.io_out(0x4B, b'1');
+    u.observe_out(0x00, 0x10);
+    assert_eq!(u.take_irq(), None, "armed, but the holding register is full");
+    u.tick(1);
+    assert_eq!(u.take_irq(), Some(4), "the character moved to the line: ready for the next");
+    assert_eq!(u.tx_interrupts, 3);
 }
 
 #[test]

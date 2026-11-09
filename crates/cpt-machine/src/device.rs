@@ -18,6 +18,11 @@ pub trait Device {
     /// Handle an `OUT` to one of this device's ports.
     fn io_out(&mut self, port: u8, val: u8);
 
+    /// Sees every `OUT` the CPU makes, to any port, after it has been routed to its owner. For
+    /// devices that react to another device's port (the 8251's transmit request is held off
+    /// until the interrupt acknowledge port re-arms it). Default: no-op.
+    fn observe_out(&mut self, _port: u8, _val: u8) {}
+
     /// Advance the device's internal time by `cycles` CPU cycles. Devices that generate
     /// periodic interrupts (a timer for the monitor, disk-completion, etc.) use this to decide
     /// when to raise an IRQ. Default: no-op.

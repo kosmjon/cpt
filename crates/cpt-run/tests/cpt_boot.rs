@@ -422,10 +422,13 @@ fn staple_brings_in_the_document_named_on_the_typing_line() {
 }
 
 /// TTY communications on the TTY disk: CODE + I, then the control page `CTTY`, enables them.
-/// The system sets up the 8251 at 4AH (reset 00 00 00 40, mode 4EH, command 37H), sends an EOT
-/// (04H) and turns its transmitter off (16H). (It used to send `04 4E`: the extra byte was
-/// stack garbage, from the CPU taking interrupts between EI and RET.) Characters from the
-/// line interrupt on RST 1 (acknowledged with 02H) and land in the receive queue at 3200H.
+/// The system sets up the 8251 at 4AH (reset 00 00 00 40, mode 4EH, command 37H) and leaves
+/// the transmitter on with nothing to send. Characters from the line interrupt on RST 1
+/// (acknowledged with 02H), and with the default reception (Screen) they appear on the screen
+/// with the parity bit stripped. (Before the transmit request was held off until 10H on port
+/// 00H, a stream of transmit interrupts let timer ticks nest until the stack ran through the
+/// comm control block at 2D00H: the start-up "sent" stack garbage (`04`, `04 4E`) and the
+/// reception table pointer was overwritten, so received text showed as wrong glyphs.)
 #[test]
 fn tty_communications_set_up_the_8251_and_receive() {
     let Some(img) = tty_image() else { return };
@@ -433,15 +436,54 @@ fn tty_communications_set_up_the_8251_and_receive() {
         "--serial-in", "{48}{C5}{CC}{CC}{CF}{8D}{0A}", "--serial-in-at", "105000000"]);
     assert!(last_row(&out, "   1 |").starts_with("   1 |TTY COMMUNICATIONS ENABLED"), "{}", out);
     let serial = out.lines().find(|l| l.starts_with("serial 8251")).unwrap_or_else(|| panic!("no serial line:\n{}", out));
-    // Reset, 4CH, mode, command; then (in an order that depends on the line's timing) 4CH = 09
-    // and the transmitter turned off.
-    assert!(serial.contains("control writes: 4A:00 4A:00 4A:00 4A:40 4C:00 4A:4E 4A:37 "), "{}", serial);
-    assert!(serial.contains("4C:09") && serial.contains("mode 4E, command 16, 4CH = 09"), "{}", serial);
-    assert!(out.contains("  sent 1 bytes: \"{04}\""), "{}", out);
+    // Reset, 4CH, mode, command, then 4CH = 09. The transmitter stays on.
+    assert!(serial.contains("control writes: 4A:00 4A:00 4A:00 4A:40 4C:00 4A:4E 4A:37 4C:09"), "{}", serial);
+    assert!(serial.contains("mode 4E, command 37, 4CH = 09"), "{}", serial);
+    assert!(out.contains("  sent 0 bytes: \"\""), "{}", out);
     assert!(out.contains("  received 7 bytes (0 still waiting)"), "{}", out);
+    assert!(out.lines().any(|l| l.contains(" |HELLO ") && l.split('|').nth(1).map(str::trim_end) == Some("HELLO")),
+        "HELLO on the screen:\n{}", out);
     let acks = out.lines().find(|l| l.starts_with("interrupt acknowledges")).unwrap();
     assert!(acks.contains(" 02x"), "receive interrupts (RST 1) acknowledged: {}", acks);
     assert!(!out.contains("  4AH x") && !out.contains("4CH x"), "4AH-4CH are mapped now:\n{}", out);
+}
+
+/// The TTY keys enabling communications, then CODE + K for the menus. A menu item is picked
+/// with SPACE (next item) and RETURN. COMMUNICATIONS starts on Select, SELECTION on
+/// Transmission, RECEPTION on None.
+const TTY_ON: &str = "{+77}i{-77}{ms 1500}ctty{14}{ms 8000}";
+const TTY_MENU: &str = "{+77}k{-77}{ms 3000}";
+
+/// Select, Transmission, KB: what is typed is sent as 7-bit ASCII with the even parity the
+/// control page asks for (made by the software; the chip runs 8 bits, no parity), RETURN as CR.
+#[test]
+fn tty_transmission_from_the_keyboard_sends_what_is_typed() {
+    let Some(img) = tty_image() else { return };
+    let keys = format!("{TTY_ON}{TTY_MENU}{{14}}{{ms 3000}}{{14}}{{ms 3000}}{{14}}{{ms 3000}}hello{{ms 500}}{{14}}{{ms 3000}}");
+    let out = boot_with(&img, "150000000", &["--keys", &keys, "--keys-at", "80000000"]);
+    assert!(out.contains("  sent 6 bytes: \"{E8}ello{8D}\""), "{}", out);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |TTY COMMUNICATIONS ENABLED"), "{}", out);
+}
+
+/// Select, Reception, Disk asks `FILE NAME:`, then shows RECEPTION IN PROCESS and files what
+/// arrives as that document: parity stripped, LF dropped, CR kept as the CPT's new line. The
+/// text arrives by cycle 125.3M. About 25 s later (174M–176M), with no key pressed, the CPT
+/// ends the reception itself (RECEPTION STOPPED) and the document is on the disk [HYPOTHESIS:
+/// an idle-line timeout; whether the control page sets it is unknown].
+#[test]
+fn tty_reception_to_disk_files_a_document() {
+    let Some(img) = tty_image() else { return };
+    let saved = std::env::temp_dir().join(format!("cpt-rx-{}.img", std::process::id()));
+    let keys = format!("{TTY_ON}{TTY_MENU}{{14}}{{ms 3000}}{{10}}{{ms 1000}}{{14}}{{ms 3000}}{{10}}{{ms 1000}}{{14}}{{ms 3000}}rxtest{{14}}{{ms 12000}}");
+    let out = boot_with(&img, "180000000", &["--keys", &keys, "--keys-at", "80000000",
+        "--serial-in", "{48}{C5}{CC}{CC}{CF}{8D}{0A}{F3}{E5}{E3}{6F}{EE}{E4}{8D}{0A}", "--serial-in-at", "125000000",
+        "--save-disk1", saved.to_str().unwrap()]);
+    let bytes = std::fs::read(&saved).expect("the saved disk");
+    let _ = std::fs::remove_file(&saved);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |RECEPTION STOPPED"), "{}", out);
+    assert!(out.contains("  received 15 bytes (0 still waiting)"), "{}", out);
+    let doc = b"\x01RXTEST\x02HELLO\rsecond\r\r\x03";
+    assert!(bytes.windows(doc.len()).any(|w| w == doc), "RXTEST's text on the disk");
 }
 
 /// The speaker (8253 counter 0): start-up plays sound 1 from the table at 1581H (2000 Hz for
