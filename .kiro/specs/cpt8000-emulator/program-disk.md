@@ -969,7 +969,24 @@ Not yet seen: a second split (the inner root filling, 11 leaves), and deleting p
 **It persists.** Saved with `--save-disk2` and mounted again after a fresh boot, IN 2 ZZ
 brings the page back (boot test `a_blank_data_disk_takes_a_page_and_keeps_it`).
 
-## Patch pages **[CONFIRMED by disassembly and by running it; syntax details HYPOTHESIS]**
+## Patch pages **[CONFIRMED by disassembly and by running a real patch page]**
+
+**A working patch page** (`p1.txt` in the repository root, for cpt2489) [CONFIRMED,
+2026-11-03]. Typed on the CPT and OUT as `.P1` on the program disk, it is applied at the next
+start-up, and OUT to an empty drive 2 then shows `6.11 PUT IN A DISK YOU DUMMY!!` instead of
+`THE DISK IS NOT IN PLACE.` What the test showed:
+- **The first line is a title and is skipped.** The reader hands the interpreter the text
+  after the first line (the TP printer table also starts with description lines). A page whose
+  first line is `!xxxxx` fails with error 1: the `!` scan reaches the end of the page.
+- **`@segment:offset` counts from the end of the segment's function table.** The interpreter
+  calls 01.04 (through 3CF0H on cpt2489) with L = FFH, which returns the table address + 1 +
+  2 × the function count. For segment 42 (2AH) that's B6E8H on cpt2489 and AC50H on cpt.img.
+- The message texts are resident in segment 2A: 5.1 at CB44H and 6.11 at CD39H on cpt2489
+  (offsets 5212 and 5713), and BAF5H and BCEAH on cpt.img (offsets 3749 and 4250). So a page
+  for cpt.img needs those offsets instead.
+- The checksum rule below is right: `$138` for this page.
+
+The rest of this section is the analysis from before the test.
 
 Per the user, a program disk could carry hidden "patch pages": documents in a special syntax
 that patch the code after it has been loaded, to fix bugs. The system has this mechanism, but
@@ -1017,10 +1034,11 @@ only in the code's own request blocks.
 - **Errors** are shown as `xxxxx  *** PATCH PAGE ERROR ***` with the error number placed at
   03B5H (1CF6H). The `xxxxx` would be replaced by the page or section ID.
 
-**An example patch page** [HYPOTHESIS: built from the interpreter's code, not tested]. It is
-a document named `.P1` whose text is:
+**An example patch page** (syntax only; the addresses are placeholders). It is a document
+named `.P1` whose text is (the first line is the skipped title):
 
 ```
+EXAMPLE PATCH PAGE
 !xxxxx
 @35:120 (0,0,0)
 @35:200 (195,*35:300)
