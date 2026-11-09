@@ -3,8 +3,9 @@ rem Build the CPT wasm module, copy it next to the web page, and serve the page.
 rem Then open http://localhost:8080 in a browser. Press Ctrl+C to stop the server.
 rem
 rem Needs (once): rustup target add wasm32-unknown-unknown
-rem For the real CPT system, insert disk\cpt.img in drive 1 on the page. Make it with:
-rem   python tools\td0.py .kiro\specs\cpt8000-emulator\cpt.td0 --raw disk\cpt.img
+rem For the real CPT system, insert disk\cpt.img in drive 1 on the page. Make the images with
+rem setup-disks.bat (decodes the .td0 files in .kiro\specs\cpt8000-emulator). The page also
+rem links a blank data disk for drive 2 (crates\cpt-wasm\web\blank-data.img).
 
 rem Run from the repository root (where this file is), wherever it was started from.
 cd /d "%~dp0"

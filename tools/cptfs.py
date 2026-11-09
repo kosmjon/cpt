@@ -75,9 +75,14 @@ def main(argv):
     img = open(argv[0], "rb").read()
     label = sector(img, 0)
     total = int.from_bytes(label[5:7], "big")
-    print("volume label: %d sectors, %d per track, %d bytes each, %d tracks; text %r"
-          % (total, label[0x29], int.from_bytes(label[0x2A:0x2C], "big"), label[0x2C],
-             label[0x37:0x48].decode("latin-1").strip()))
+    if label[0x29] == 0:
+        # A data disk's label is only 16 bytes: no geometry fields or text (see mkdatadisk.py).
+        print("volume label: %d sectors; a data disk (the label has no geometry fields; byte 1 = %02X)"
+              % (total, label[1]))
+    else:
+        print("volume label: %d sectors, %d per track, %d bytes each, %d tracks; text %r"
+              % (total, label[0x29], int.from_bytes(label[0x2A:0x2C], "big"), label[0x2C],
+                 label[0x37:0x48].decode("latin-1").strip()))
 
     amap = sector(img, 3) + sector(img, 6)
     counts = {}
@@ -87,15 +92,15 @@ def main(argv):
     print("allocation:   " + ", ".join("%s %d" % (ALLOC[c], n) for c, n in sorted(counts.items())))
 
     root = sector(img, 13)
-    print("directory:    root at track 0 sector 13 (level %r)" % chr(root[0]))
-    # The root's items point at the leaves (logical numbers; see physical()).
-    entries = []
-    o = 1
-    while o + 23 <= SS and any(root[o:o + 23]):
-        child = int.from_bytes(root[o + 20:o + 23], "big")
-        if child:
-            entries += walk(img, child, 1)
-        o += 23
+    if root[0] not in (0x30, 0x31):
+        print("directory:    root at track 0 sector 13 is not a directory node (first byte %02X);"
+              " an unformatted disk?" % root[0])
+        return 1
+    print("directory:    root at track 0 sector 13 (level %r%s)"
+          % (chr(root[0]), ", a leaf" if root[0] == 0x30 else ""))
+    # Track 0 sector 13 is logical sector 15. The root is a leaf on a small data disk, and an
+    # inner node (pointing at leaves) on the program disk; walk() handles both.
+    entries = walk(img, 15)
     print("%d documents:" % len(entries))
     print("  %-16s %-10s %-8s %s" % ("name", "field", "pointer", "(leaf sector)"))
     for name, field, ptr, leaf in entries:

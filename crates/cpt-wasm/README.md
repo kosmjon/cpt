@@ -55,12 +55,14 @@ The web page shows two drive bays beside the screen with Insert (file picker) / 
 
 The page powers up idle with a black screen. Insert a real CPT program disk image in
 **drive 1** and it boots the real CPT software. The image must be the raw 77 × 16 × 256 =
-315,392-byte form. Make it from a TeleDisk file with:
+315,392-byte form. Make the images from the repository's TeleDisk files with
+`setup-disks.bat` (or `python tools/setup_disks.py`) in the repository root; it writes
+`disk/cpt.img`, `disk/cpt2365.img` and `disk/cpt2489.img`.
 
-```sh
-python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img
-python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img
-```
+**A disk for drive 2.** `web/blank-data.img` (kept in the repository, and linked under the
+screen) is a blank, formatted data disk. Insert it in drive 2, then to file a page on it:
+press OUT, backspace twice over the station digit, type `2`, then the page name and Enter.
+Eject the disk to download it with the page on it. (`tools/mkdatadisk.py` makes it.)
 
 **Which disk:**
 - **`cpt.img`** is the main program disk.

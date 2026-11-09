@@ -52,6 +52,14 @@
         font-family: "Courier New", monospace;
         opacity: 0.7;
       }
+      .footnote {
+        margin-top: 8px;
+        font: 13px system-ui, sans-serif;
+        opacity: 0.75;
+      }
+      .footnote a {
+        color: inherit; /* underlined, as links are by default */
+      }
       /* Display and drive bays side by side. */
       .workstation {
         display: flex;
@@ -285,6 +293,11 @@
     </div>
 
     <div id="status">loading…</div>
+    <div class="footnote">
+      Need a disk for drive 2?
+      <a href="blank-data.img" download>blank-data.img</a> is a blank, formatted data disk. To file a
+      page on it, press OUT, backspace twice over the station digit, type 2, then the page name.
+    </div>
     <!-- hidden file input reused by both Insert buttons -->
     <input type="file" id="fileInput" style="display: none" />
     <script src="speaker-audio.js"></script>

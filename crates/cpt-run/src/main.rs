@@ -16,7 +16,8 @@
 //!                                          from <origin> (default 0). Prints and exits.
 //!   cpt-run --cpt-boot <image> [<cycles>] [<break addr>|-] [<read delay>] [<mem out>]
 //!           [--keys "<script>"] [--keys-at <cycle>] [--screen-at <cycle>]...
-//!           [--brk-after <cycle>] [--profile]
+//!           [--brk-after <cycle>] [--brk-read <t41s14|L660|670>] [--profile]
+//!           [--disk2 <img>] [--save-disk1 <out>] [--save-disk2 <out>]
 //!           [--serial-listen <addr> [--serial-raw]] [--serial-in "<script>"]
 //!           [--serial-in-at <cycle>] [--live]
 //!                                          Boot a real CPT program disk on the real hardware
@@ -128,6 +129,12 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mut serial_in: Option<String> = None;
     let mut serial_in_at: Option<u64> = None;
     let mut live = false;
+    // Stop when the floppy reads this sector (track, physical sector).
+    let mut brk_read: Option<(u8, u8)> = None;
+    // A second disk in station 2, and where to save the drives' images at the end.
+    let mut disk2: Option<String> = None;
+    let mut save_disk1: Option<String> = None;
+    let mut save_disk2: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -138,6 +145,10 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
             "--serial-in-at" => serial_in_at = Some(it.next().ok_or("--serial-in-at needs a cycle count")?
                 .parse().map_err(|_| "invalid --serial-in-at")?),
             "--live" => live = true,
+            "--disk2" => disk2 = Some(it.next().ok_or("--disk2 needs a disk image")?.clone()),
+            "--save-disk1" => save_disk1 = Some(it.next().ok_or("--save-disk1 needs a file name")?.clone()),
+            "--save-disk2" => save_disk2 = Some(it.next().ok_or("--save-disk2 needs a file name")?.clone()),
+            "--brk-read" => brk_read = Some(parse_sector(it.next().ok_or("--brk-read needs a sector: t41s14, L660 or 656")?)?),
             "--keys" => keys_script = Some(it.next().ok_or("--keys needs a script")?.clone()),
             "--keys-at" => keys_at = it.next().ok_or("--keys-at needs a cycle count")?
                 .parse().map_err(|_| "invalid --keys-at")?,
@@ -183,6 +194,16 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mem_out: Option<String> = args.get(4).cloned();
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
     let mut sys = CptSystem::boot(&bytes, op_delay).map_err(|e| format!("{}: {}", path, e))?;
+    if let Some(p) = &disk2 {
+        let b = std::fs::read(p).map_err(|e| format!("cannot read {}: {}", p, e))?;
+        let geom = cpt_machine::cpt_floppy::cpt_geometry();
+        if b.len() != geom.total_bytes() {
+            return Err(format!("{}: {} bytes; a CPT disk is {}", p, b.len(), geom.total_bytes()));
+        }
+        let mut d = cpt_machine::DiskImage::blank(geom);
+        d.load_bytes(&b);
+        sys.floppy().mount(1, d);
+    }
     let (fdc_dev, pit_dev, ack_dev, kb_dev, usart_dev) = (sys.fdc, sys.pit, sys.ack, sys.kb, sys.usart);
     // Something is on the line (DSR on) when there's a terminal or a serial input script.
     let serial_on = serial_listen.is_some() || !serial_bytes.is_empty();
@@ -218,21 +239,30 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
     let mut next_screen = 0usize;
     // --profile: instructions executed per (bank block, 16-byte line) from --keys-at on.
     let mut hist: std::collections::HashMap<(u8, u16), u64> = std::collections::HashMap::new();
+    // How a stop is reported: where, the last instructions, and the top of the stack.
+    fn report_break(exec: &mut Executive, what: &str, at: u64,
+        recent: &std::collections::VecDeque<(u16, u8, u16, u16, u16)>) {
+        println!("{} at cycle {} (PC {:04X}, block {} selected); the last {} instructions (PC A BC DE HL):",
+            what, at, exec.cpu.pc, exec.machine.selected_block(), recent.len());
+        for chunk in recent.iter().collect::<Vec<_>>().chunks(5) {
+            let row: Vec<String> = chunk.iter().map(|&&(pc, a, bc, de, hl)|
+                format!("{:04X} {:02X} {:04X} {:04X} {:04X}", pc, a, bc, de, hl)).collect();
+            println!("  {}", row.join(" | "));
+        }
+        let sp = exec.cpu.sp;
+        let words: Vec<String> = (0..8u16).map(|k| {
+            let a = sp.wrapping_add(2 * k);
+            format!("{:04X}", exec.machine.read(a) as u16 | (exec.machine.read(a.wrapping_add(1)) as u16) << 8)
+        }).collect();
+        println!("  stack at {:04X}: {}", sp, words.join(" "));
+    }
+    // --brk-read: how many reads the floppy had logged when last checked.
+    let mut reads_seen = 0usize;
     while exec.cpu.cycles - start < budget && !exec.is_terminally_halted() {
         if Some(exec.cpu.pc) == brk && exec.cpu.cycles - start >= brk_after {
-            println!("breakpoint {:04X} reached at cycle {} (block {} selected); the last {} instructions (PC A BC DE HL):",
-                exec.cpu.pc, exec.cpu.cycles - start, exec.machine.selected_block(), recent.len());
-            for chunk in recent.iter().collect::<Vec<_>>().chunks(5) {
-                let row: Vec<String> = chunk.iter().map(|&&(pc, a, bc, de, hl)|
-                    format!("{:04X} {:02X} {:04X} {:04X} {:04X}", pc, a, bc, de, hl)).collect();
-                println!("  {}", row.join(" | "));
-            }
-            let sp = exec.cpu.sp;
-            let words: Vec<String> = (0..8u16).map(|k| {
-                let a = sp.wrapping_add(2 * k);
-                format!("{:04X}", exec.machine.read(a) as u16 | (exec.machine.read(a.wrapping_add(1)) as u16) << 8)
-            }).collect();
-            println!("  stack at {:04X}: {}", sp, words.join(" "));
+            let at = exec.cpu.cycles - start;
+            let what = format!("breakpoint {:04X} reached", exec.cpu.pc);
+            report_break(&mut exec, &what, at, &recent);
             break;
         }
         let c = &exec.cpu;
@@ -255,6 +285,26 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         }
         exec.step();
         let now = exec.cpu.cycles - start;
+        // --brk-read: stop as the read command for the sector is issued (OUT 24H), so the code
+        // that asked for it is the one running, with its caller on the stack.
+        if let Some((bt, bs)) = brk_read {
+            let fdc = exec.machine.device_mut(fdc_dev).unwrap().as_any_mut().downcast_mut::<CptFloppy>().unwrap();
+            let log = &fdc.cmd_log;
+            let hit = if log.len() > reads_seen && now >= brk_after {
+                // Read Sector commands are 8xH/9xH; the head is on the track being read.
+                log[reads_seen..].iter().rev()
+                    .find(|c| matches!(c.0 >> 4, 0x8 | 0x9) && c.3 == bt && c.2 == bs).copied()
+            } else {
+                None
+            };
+            reads_seen = log.len();
+            if let Some(c) = hit {
+                let what = format!("read of sector t{}s{} (linear {}) issued, DMA to {:04X} ({} bytes)",
+                    bt, bs, bt as usize * 16 + bs as usize, c.4, (c.5 & 0x3FFF) + 1);
+                report_break(&mut exec, &what, now, &recent);
+                break;
+            }
+        }
         if reads_at_keys.is_none() && !schedule.is_empty() && now >= keys_at {
             let fdc = exec.machine.device_mut(fdc_dev).unwrap().as_any_mut().downcast_mut::<CptFloppy>().unwrap();
             reads_at_keys = Some(fdc.read_log.len());
@@ -445,6 +495,19 @@ fn cpt_boot_command(args: &[String]) -> Result<(), String> {
         println!("\nsaved memory to {}: bank 0, then {} blocks of 32K (block {} was selected)",
             path, m.mem.block_count(), keep);
     }
+    // The drives' images as they are at the end (writes included).
+    for (drive, path) in [(0usize, &save_disk1), (1usize, &save_disk2)] {
+        if let Some(path) = path {
+            let fdc = exec.machine.device_mut(fdc_dev).unwrap().as_any_mut().downcast_mut::<CptFloppy>().unwrap();
+            match fdc.image(drive) {
+                Some(img) => {
+                    std::fs::write(path, img.bytes()).map_err(|e| format!("cannot write {}: {}", path, e))?;
+                    println!("\nsaved the disk in station {} to {}", drive + 1, path);
+                }
+                None => println!("\nstation {} is empty; nothing saved to {}", drive + 1, path),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -615,6 +678,31 @@ fn serial_schedule(script: &str, at: u64) -> Result<Vec<(u64, u8)>, String> {
         out.push((t, b));
     }
     Ok(out)
+}
+
+/// A CPT disk sector for `--brk-read`, as (track, physical sector):
+/// - `t41s14`: track 41, physical sector 14 (as the report's read lists show them);
+/// - `L660`: logical sector 660, as directory pointers number them (track * 16 + s, with the
+///   filesystem's skew: physical = (3 * s + 2 * track) mod 16; see tools/cptfs.py);
+/// - `670`: linear physical sector 670 (track * 16 + physical sector).
+fn parse_sector(s: &str) -> Result<(u8, u8), String> {
+    let bad = || format!("bad sector {:?} (want t41s14, L660 or 670)", s);
+    let lower = s.trim().to_ascii_lowercase();
+    let (t, p) = if let Some(rest) = lower.strip_prefix('t') {
+        let (t, p) = rest.split_once('s').ok_or_else(bad)?;
+        (t.parse::<u32>().map_err(|_| bad())?, p.parse::<u32>().map_err(|_| bad())?)
+    } else if let Some(n) = lower.strip_prefix('l') {
+        let n: u32 = n.parse().map_err(|_| bad())?;
+        let (t, s) = (n / 16, n % 16);
+        (t, (3 * s + 2 * t) % 16)
+    } else {
+        let n: u32 = lower.parse().map_err(|_| bad())?;
+        (n / 16, n % 16)
+    };
+    if t >= 77 || p >= 16 {
+        return Err(bad());
+    }
+    Ok((t as u8, p as u8))
 }
 
 /// Show bytes from the serial line as text: printable ASCII as is, CR/LF as \r \n, others as

@@ -77,13 +77,21 @@ Three TeleDisk images are in `.kiro/specs/cpt8000-emulator/`:
 | `cpt2365.td0` | the same disk (decodes byte for byte the same as `cpt.td0`) |
 | `cpt2489.td0` | "Program disk for 8100, 8515/25 CPT word processor w/TTY", 28 documents, with TTY communications |
 
-Decode them to raw images (77 tracks × 16 sectors × 256 bytes) under `disk/` (gitignored).
-`td0.py` handles both normal and "advanced" (LZHUF-compressed) TeleDisk files:
+The emulator and its tests use flat images (77 tracks × 16 sectors × 256 bytes). They aren't
+kept in the repository: they're decoded from the `.td0` files into `disk/` (gitignored). After
+cloning, run this once (it needs only Python):
 
 ```
-python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img
-python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img
+setup-disks.bat
 ```
+
+or `python tools/setup_disks.py`. It makes `disk/cpt.img`, `disk/cpt2365.img` and
+`disk/cpt2489.img`, and a blank data disk, `disk/blank-data.img`. Without the images, the
+real-disk tests print a note and skip. `tools/td0.py` handles both normal and "advanced"
+(LZHUF-compressed) TeleDisk files, and checks every CRC.
+
+A blank, formatted **data disk** for station 2 is also kept in the repository, as
+`crates/cpt-wasm/web/blank-data.img` (the web page links it). It holds no CPT software.
 
 #### In a browser
 
@@ -121,6 +129,13 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   read delay must be about 32,000 cycles or more; the software checks disk timing.
 - **Key scripts:** `{XX}` taps key number XX (hex), `{+XX}`/`{-XX}` press/release, `{ms N}`
   waits. Other options: `--screen-at`, `--brk-after`, `--profile`.
+- **A second disk:** `--disk2 <img>` mounts a disk in station 2 (for example one made by
+  `tools/mkdatadisk.py`), and `--save-disk1 <out>` / `--save-disk2 <out>` write a drive's
+  image back at the end, with whatever the CPT wrote to it. To file to station 2, press
+  OUT, backspace twice over the station digit and type `2`.
+- **Sector-read breakpoint:** `--brk-read <t41s14|L660|670>` stops as the read of a sector is
+  issued (physical track/sector, logical as directory pointers number it, or linear), with
+  the code and stack that asked for it.
 - **Serial:** the 8251 can be a Telnet server (`--serial-listen 127.0.0.1:2323`), or take
   scripted input (`--serial-in`).
 
@@ -128,8 +143,10 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
 
 | Tool | What it does |
 |---|---|
+| `tools/setup_disks.py` | Make `disk/*.img` from the repository's `.td0` files, plus a blank data disk (`setup-disks.bat` runs it) |
 | `tools/td0.py` | Decode a TeleDisk image (incl. LZHUF advanced compression) to a raw image |
-| `tools/cptfs.py` | List a CPT disk: volume label, allocation map, document directory |
+| `tools/cptfs.py` | List a CPT disk: volume label, allocation map, document directory (program or data disks) |
+| `tools/mkdatadisk.py` | Make a blank, formatted CPT data disk image (`--zero` for an unformatted one) |
 | `tools/cptsegs.py` | The segment / bank / function map from a memory dump (hex and decimal) |
 | `tools/cptkeys.py` | The keyboard remap tables from a memory dump |
 
@@ -154,6 +171,10 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
   ERASE (4FH) is a hypothesis.
 - **TTY protocol:** received text isn't filed into the document, and typed text isn't sent.
   See `segments-cpt2489.md`, "Communications: known issues and next steps".
+- **Disk utilities (Work Disk Duplication, Disk Erase, Work Disk Repair):** reached on the
+  real machine with CODE + O and operation 5, 6 or 7. The `cpt2489` disk has their message
+  text, but not their code, so these three operations aren't available from the disks we
+  have. They would need another disk image.
 - **Printing:** there's no printer device.
 - **Glyphs:** the character ROM is unknown, so special glyphs are ASCII stand-ins.
 - **Patch pages:** the mechanism is decoded (documents `.P`–`.P9`), but neither disk has one,
@@ -270,8 +291,8 @@ Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`
   real system").
   - The open work is the unidentified keys, the TTY protocol, printing and the character
     ROM.
-  - `cargo test --workspace` runs 336 tests with no warnings. The real-disk boot tests skip
-    themselves unless `disk/cpt.img` and `disk/cpt2489.img` have been decoded.
+  - `cargo test --workspace` runs 339 tests with no warnings. The real-disk boot tests skip
+    themselves unless `setup-disks.bat` has made `disk/cpt.img` and `disk/cpt2489.img`.
   - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
 - **The assembler** front end and code generation are working and tested for the confirmed
   MOL80 subset. The MOL80 macro/expansion layer is designed and awaits the full manual and

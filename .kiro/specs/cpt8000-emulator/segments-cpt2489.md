@@ -28,6 +28,10 @@ on demand, hasn't been checked [VERIFY].
 - **415 far-call sites** (237 distinct functions); cpt.img has 423 (242).
 - **New on this disk:** 17 (11H), 38 (26H) and **43 (2BH), the serial communications segment**.
 - **Missing here, present on cpt.img:** 55 (37H) and 59 (3BH).
+- **On the disk but not loaded:** segment **30 (1EH)**, the **message module for the disk
+  utilities** (the text for erase, duplicate, backup, restore, reconstruct, sort and SRS). It's
+  a module at logical 655 that operation 0 doesn't include; nothing calls it, and the
+  utilities' own code isn't on this disk. See `program-disk.md`, "Disk utilities".
 - **Moved to another block:** 14 (0EH) and 26 (1AH) from block 2 to block 1, 49 (31H) from
   block 1 to block 0, and 58 (3AH) from block 0 to block 2.
 - Most other segments are where they are on cpt.img, but their function addresses have shifted
@@ -59,7 +63,7 @@ on demand, hasn't been checked [VERIFY].
 | 1A | 26 | block 1 | F509H | 2 | 2 | block 2 | |
 | 23 | 35 | block 2 | B238H | 39 | 56 | same | **the editor** (23.00 is the editor loop) |
 | 25 | 37 | block 0 | 995CH | 6 | 6 | same | |
-| 26 | 38 | block 0 | 9F4BH | 1 | 1 | **not present** | new; called once, from segment 42 (2AH). Text nearby: `C10-19:` … `C250-255:` and `CLMN0:` …, possibly a character-code or column table, e.g. a TTY translation table [HYPOTHESIS] |
+| 26 | 38 | block 0 | 9F4BH | 1 | 1 | **not present** | **the communications and code-set prompt tables** [CONFIRMED by disassembly]. 26.00 returns the address of prompt table 5–12 (list at 9F5DH), for 2A.01. Table 8 (9F75H) is the code-set prompts `C0-9:` … `C250-255:` used by control pages such as C-ASCII.T (see `program-disk.md`, "How prompts and string tables are found") |
 | 28 | 40 | block 0 | AA92H | 7 | 13 | same | on cpt.img, STOP (3FH) calls 28.02 |
 | 29 | 41 | block 0 | B2C4H | 4 | 32 | same | messages (29.01 shows a message) |
 | 2A | 42 | block 0 | B6DFH | 4 | 11 | same | title-line display (2A.02 shows the unit name) |

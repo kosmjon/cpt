@@ -1,7 +1,8 @@
-//! Boot the real CPT program disk (`disk/cpt.img`, extracted from `cpt.td0` by
-//! `tools/td0.py`) on the real-hardware model, through `cpt-run --cpt-boot`.
+//! Boot the real CPT program disk (`disk/cpt.img`, decoded from `cpt.td0`) on the real-hardware
+//! model, through `cpt-run --cpt-boot`.
 //!
-//! If the image has not been extracted these tests print a note and pass without running.
+//! If the images have not been made (run `setup-disks.bat`, or `python tools/setup_disks.py`),
+//! the tests that need them print a note and pass without running.
 
 use std::process::Command;
 
@@ -10,7 +11,7 @@ fn image() -> Option<String> {
     if std::path::Path::new(&path).exists() {
         Some(path)
     } else {
-        eprintln!("skipping: run  python tools/td0.py .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img");
+        eprintln!("skipping: disk/cpt.img not found; run setup-disks.bat (python tools/setup_disks.py)");
         None
     }
 }
@@ -21,7 +22,7 @@ fn tty_image() -> Option<String> {
     if std::path::Path::new(&path).exists() {
         Some(path)
     } else {
-        eprintln!("skipping: run  python tools/td0.py .kiro/specs/cpt8000-emulator/cpt2489.td0 --raw disk/cpt2489.img");
+        eprintln!("skipping: disk/cpt2489.img not found; run setup-disks.bat (python tools/setup_disks.py)");
         None
     }
 }
@@ -255,6 +256,75 @@ fn skip_discards_the_lower_screen_by_unit() {
     assert!(last_row(&out, "   1 |").contains(" 1    0  PAGE "), "{}", last_row(&out, "   1 |"));
     let out = boot_with(&img, "115000000", &["--keys", "{3D}rc-l1{14}{ms 8000}{7E}{ms 400}{2F}{ms 4000}", "--keys-at", "80000000"]);
     assert!(last_row(&out, "  48 |").starts_with("  48 |August 19, 1987"), "LINE, SKIP: the format line is gone:\n{}", out);
+}
+
+/// A blank, formatted CPT data disk, as `tools/mkdatadisk.py` makes it: a 16-byte label, track
+/// 0 reserved in the allocation map, and an empty directory leaf as the root.
+fn blank_data_disk() -> Vec<u8> {
+    let sec = |t: usize, s: usize| (t * 16 + s) * 256;
+    let mut img = vec![0u8; 77 * 16 * 256];
+    img[sec(0, 0)..sec(0, 0) + 16].copy_from_slice(&[0, 1, 1, 2, 0, 4, 0xD0, 0, 0, 1, 0, 0, 0x0F, 0, 0, 0]);
+    img[sec(0, 3)..sec(0, 3) + 4].copy_from_slice(&[0x55; 4]);
+    img[sec(0, 13)] = 0x30;
+    img
+}
+
+/// The blank data disk kept in the repository (for the web page) is exactly what the generator
+/// makes, so the two can't drift apart. Needs no program disk.
+#[test]
+fn the_committed_blank_data_disk_matches_the_generator() {
+    let path = format!("{}/../cpt-wasm/web/blank-data.img", env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {}", path, e));
+    assert!(bytes == blank_data_disk(),
+        "regenerate it with: python tools/mkdatadisk.py crates/cpt-wasm/web/blank-data.img");
+}
+
+/// A blank data disk in station 2 takes a page: OUT 2 ZZ changes exactly the allocation map
+/// (t0s3), the directory root (t0s13) and the page's first block (t1s2). Rebooting with the
+/// saved disk in station 2, IN 2 ZZ brings the page back. (Backspacing twice over the prompt's
+/// station digit and typing 2 selects station 2.)
+#[test]
+fn a_blank_data_disk_takes_a_page_and_keeps_it() {
+    let Some(img) = image() else { return };
+    let tag = std::process::id();
+    let blank = std::env::temp_dir().join(format!("cpt-blank-{}.img", tag));
+    let saved = std::env::temp_dir().join(format!("cpt-saved-{}.img", tag));
+    std::fs::write(&blank, blank_data_disk()).unwrap();
+
+    let out = boot_with(&img, "105000000", &["--disk2", blank.to_str().unwrap(), "--save-disk2", saved.to_str().unwrap(),
+        "--keys", "TEST{14}hello world{14}{ms 1000}{2D}{ms 1500}{06}{06}2zz{14}{ms 8000}", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |OUT        2 ZZ"), "{}", last_row(&out, "   1 |"));
+    let bytes = std::fs::read(&saved).expect("the saved disk");
+    let before = blank_data_disk();
+    let changed: Vec<usize> = (0..1232).filter(|&p| before[p * 256..(p + 1) * 256] != bytes[p * 256..(p + 1) * 256]).collect();
+    assert_eq!(changed, vec![3, 13, 18], "t0s3, t0s13 and t1s2 (linear sectors)");
+    assert_eq!(&bytes[18 * 256..18 * 256 + 4], &[0x01, b'Z', b'Z', 0x02], "the page's header block");
+    assert_eq!(bytes[13 * 256], 0x30, "the root is still a leaf");
+    assert_eq!(&bytes[13 * 256 + 24..13 * 256 + 26], b"ZZ", "with ZZ in its first used slot");
+
+    let out = boot_with(&img, "105000000", &["--disk2", saved.to_str().unwrap(),
+        "--keys", "{3D}{ms 1500}{06}{06}2zz{14}{ms 8000}", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "   1 |").starts_with("   1 |IN         2 ZZ"), "{}", last_row(&out, "   1 |"));
+    assert!(last_row(&out, "  46 |").starts_with("  46 |TEST"), "{}", out);
+    assert!(last_row(&out, "  48 |").starts_with("  48 |hello world"), "{}", out);
+    let _ = std::fs::remove_file(&blank);
+    let _ = std::fs::remove_file(&saved);
+}
+
+/// `--brk-read` stops as the read of a given sector is issued. IN RC-L1 reads the letter's
+/// first block, logical 675 (track 42, physical sector 13 with the skew), into 2800H; the
+/// three ways of naming the sector stop at the same place.
+#[test]
+fn brk_read_stops_when_a_sector_read_is_issued() {
+    let Some(img) = image() else { return };
+    for sector in ["L675", "t42s13", "685"] {
+        let out = boot_with(&img, "120000000", &["--keys", "{3D}rc-l1{14}", "--keys-at", "80000000",
+            "--brk-after", "80000000", "--brk-read", sector]);
+        assert!(out.contains("read of sector t42s13 (linear 685) issued, DMA to 2800 (256 bytes) at cycle"),
+            "{}: {}", sector, out.lines().find(|l| l.starts_with("read of") || l.starts_with("ran ")).unwrap_or(""));
+        assert!(out.contains("stack at "), "{}", out);
+        assert!(!out.contains("Letter to Carl Wales"), "stopped before the letter was shown");
+    }
 }
 
 /// The staple key (05H, under WORDPAK) takes the typing line as a document name and brings

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 const require = createRequire(import.meta.url);
 const imagePath = new URL("../../../disk/cpt.img", import.meta.url);
 if (!existsSync(imagePath)) {
-  console.log("skipping: disk/cpt.img not found (run tools/td0.py --raw)");
+  console.log("skipping: disk/cpt.img not found (run setup-disks.bat or python tools/setup_disks.py)");
   process.exit(0);
 }
 

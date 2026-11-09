@@ -12,6 +12,9 @@ cpm/*.img
 # wasm build artifact copied into the web dir (rebuilt from source)
 crates/cpt-wasm/web/*.wasm
 
+# Python bytecode from the tools
+__pycache__/
+*.pyc
 # OS / editor cruft
 .DS_Store
 Thumbs.db
@@ -28,5 +31,5 @@ speaker/*.wav
 monitor/plm80tools/
 monitor/plm-build/
 
-# Disk images decoded from TeleDisk (rebuilt by tools/td0.py)
+# Disk images decoded from the TeleDisk files (rebuilt by setup-disks.bat / tools/setup_disks.py)
 disk/

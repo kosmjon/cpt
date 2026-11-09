@@ -1,7 +1,7 @@
 // Node check: boot the real CPT program disk in the wasm module through real-cpt.js (the same
 // code the page uses), run the turbo start-up, open the LEGAL document with PC key codes, and
-// check the decoded screen. Needs the disk image: python tools/td0.py
-// .kiro/specs/cpt8000-emulator/cpt.td0 --raw disk/cpt.img (skipped if it is missing).
+// check the decoded screen. Needs disk/cpt.img, made by setup-disks.bat (skipped if it is
+// missing).
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -12,7 +12,7 @@ const { RealCpt, CPT_KEY } = require("./real-cpt.js");
 
 const imagePath = new URL("../../../disk/cpt.img", import.meta.url);
 if (!existsSync(imagePath)) {
-  console.log("skipping: disk/cpt.img not found (run tools/td0.py --raw)");
+  console.log("skipping: disk/cpt.img not found (run setup-disks.bat or python tools/setup_disks.py)");
   process.exit(0);
 }
 
@@ -97,4 +97,65 @@ real.insert(0, image);
 assert.equal(real.start(), true, "boots from drive 1");
 assert.equal(real.drive(1).loaded, true, "drive 2's disk is still in after the boot");
 assert.equal(real.cycles < 1_000_000, true, "a fresh boot");
+
+// The blank data disk the page links (web/blank-data.img) takes a page in drive 2, and keeps it.
+const blank = new Uint8Array(await readFile(new URL("./blank-data.img", import.meta.url)));
+assert.equal(blank.length, image.length, "the blank data disk is a full-size CPT disk");
+function typeText(text) {
+  for (const ch of text) tap(real.keyForPcCode(ch === " " ? "Space" : "Key" + ch.toUpperCase()));
+}
+function settle() {
+  while (!real.settled) real.frame();
+}
+real.halt();
+assert.equal(real.insert(0, image), true);
+assert.equal(real.insert(1, blank), true, "drive 2 takes the blank data disk");
+assert.equal(real.start(), true);
+settle();
+typeText("ab");
+tap(real.keyForPcCode("Enter"));
+typeText("cd");
+tap(real.keyForPcCode("Enter"));
+real.runCycles(2_000_000);
+// OUT, then backspace twice over the station digit and type 2: "OUT 2 ZZ".
+tap(CPT_KEY.OUT);
+real.runCycles(3_000_000);
+tap(real.keyForPcCode("Backspace"));
+tap(real.keyForPcCode("Backspace"));
+tap(real.keyForPcCode("Digit2"));
+typeText("zz");
+tap(real.keyForPcCode("Enter"));
+real.runCycles(16_000_000);
+assert.ok(real.screenText()[0].startsWith("OUT        2 ZZ"), `OUT to station 2: ${real.screenText()[0]}`);
+const written = real.eject(1);
+assert.equal(written.length, blank.length);
+const changed = [];
+for (let p = 0; p < 1232; p++) {
+  for (let i = 0; i < 256; i++) {
+    if (written[p * 256 + i] !== blank[p * 256 + i]) {
+      changed.push(p);
+      break;
+    }
+  }
+}
+assert.deepEqual(changed, [3, 13, 18], "the map (t0s3), the directory root (t0s13) and the page's block (t1s2)");
+assert.deepEqual([...written.slice(18 * 256, 18 * 256 + 4)], [0x01, 0x5a, 0x5a, 0x02], "01 ZZ 02");
+// Reboot with the written disk in drive 2 and bring the page back.
+real.halt();
+assert.equal(real.insert(1, written), true);
+assert.equal(real.start(), true);
+settle();
+tap(CPT_KEY.IN);
+real.runCycles(3_000_000);
+tap(real.keyForPcCode("Backspace"));
+tap(real.keyForPcCode("Backspace"));
+tap(real.keyForPcCode("Digit2"));
+typeText("zz");
+tap(real.keyForPcCode("Enter"));
+real.runCycles(16_000_000);
+rows = real.screenText();
+assert.ok(rows[0].startsWith("IN         2 ZZ"), rows[0]);
+assert.ok(rows[45].startsWith("ab"), rows[45]);
+assert.ok(rows[47].startsWith("cd"), rows[47]);
+console.log("blank data disk: OUT 2 ZZ wrote 3 sectors; after a reboot IN 2 ZZ shows ab / cd");
 console.log("real system checks OK");

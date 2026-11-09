@@ -115,9 +115,16 @@ The 14 documents:
 | OP | 00000402 | 892 | | T | 000117D5 | 720 |
 | OP.00.0 | 00000259 | 545 | | WN | 0001002F | 553 |
 
+**The 4-byte field** [CONFIRMED by measuring all 43 documents on both program disks, and a
+page filed by the system]: its **low 16 bits are the document's length in bytes**, counted
+from the `01` of the header through the `03` end mark. The six print-wheel tables with
+nearly consecutive values (`000117D3` … `000117DA`) are simply tables of nearly the same
+length (6099–6106 bytes), which is why they looked like a sequence. The high 16 bits are
+0 or 1 and their meaning isn't known (1 for RC-L1, LEGAL, WN, LEX, CONTROL and the C-ASCII
+tables; 0 for MID, OP and HM-M1.2).
+
 **Not yet understood:**
-- **The 4-byte field.** Six of the documents have nearly consecutive values `000117D3` …
-  `000117DA`, which suggests a creation sequence number or date stamp rather than a size.
+- **The field's high word** (above).
 
 ### Documents
 
@@ -473,7 +480,7 @@ CODE + a letter opens the CPT's menus and modes, seen on the title line:
 |---|---|---|
 | CODE + L | 1F | `LINE SPACING  1 2 3` |
 | CODE + P | 3E | `PROGRAM  Display Load Label` (the keyboard program's menu) |
-| CODE + O | 36 | `OPERATION NUMBER` |
+| CODE + O | 36 | `OPERATION NUMBER`: restarts into another operation (system build) on the program disk (see "Operations") |
 | CODE + H | 1E | `Automatic Wraparound Manual` (hyphenation) |
 | CODE + S | 22 | `Direct Control page` |
 | CODE + A | 28 | `1-20` |
@@ -541,6 +548,408 @@ function code a key produces is listed above. What the remaining keys do:
   and 05H are the four keys whose handlers return a command (1–4) to the command level. Its
   number doesn't follow the column's low-digit pattern (that would give 1DH), but PAGE (5FH)
   breaks the pattern too.
+
+## Operations (CODE + O) **[CONFIRMED by disassembly, by running it and from the OP documents]**
+
+A program disk can hold several **operations**: separately built configurations of the
+system, each with its own set of features. They're probably built with the "BUILD AN
+OPERATION" screen (on cpt2489's `OP` page), which writes them to the program disk. The `OP`
+document lists the operations on the disk and their features.
+
+**CODE + O** (editor index 36, far call 28.05 = segment 40 function 5, A68DH in block 0 on
+cpt.img) switches between them:
+
+1. It shows `OPERATION NUMBER` on the title line and reads a number.
+2. It finds a drive with a disk (A6B4H: tries drives 0–3).
+3. It reads that disk's boot sector into a fresh page (A6D1H–A731H) and copies it to 0000H
+   with interrupts off (A737H–A73FH).
+4. It jumps to 0000H with **D = the drive** and **E = the operation number**. A number of
+   20 or more becomes 0 (A74EH).
+
+So choosing an operation reboots the machine into that build. The boot code takes the
+operation number in E. A plain power-up boots operation 0, since the emulator starts the
+boot sector with D = 0 and E = 0.
+
+Running it on cpt.img:
+- **CODE + O, `1`, RETURN** restarts and loads a different set of sectors. The chime plays
+  twice, at 125M and 152M cycles, which may be a second restart [VERIFY].
+- **Operations 0 and 2** load the normal build. There's no operation 2 on this disk, so it
+  seems to fall back to 0 [VERIFY].
+
+**cpt.img's operations** (its `OP` document, "CONFIGURED FOR: PSA", 3/28/84, by Tracy, "8100
+w/Rotary 5", "SPELLING VERIFIER, BACKGROUND SEARCH, & OUTLINER ADDED"). Both are WORD
+PROCESSING, with printer type 8X00 STANDARD (Rotary IV–IX) and English hyphenation and
+system messages:
+
+| Operation | Features |
+|---|---|
+| 0 | Keyboard to Printer, Control Page Printing, Footnotes, Output to Disk, Move, Screen Sort, Text Insertion, Background Search/Locate/Replace, Shortcut, MathPak, DU30, Outliner |
+| 1 | Spelling Verifier, Control Page Printing, Output to Disk, Move, Background Search/Locate/Replace, Outliner |
+
+Older copies on the same disk:
+- `OP.00.0` ("PACIFIC SOUTHWEST AIRMOTIVE", March 5, 1984) is operation 0 without the
+  Outliner, and with plain Search/Locate/Replace.
+- `OP.00.1` and `OP.01.0` are single-operation pages, each ending "TOUCH RETURN TO CONTINUE".
+
+**cpt2489's operation** (its `OP` document, "BUILD AN OPERATION", "CONFIGURED FOR: PSA", by T.
+Reed, 12/30/85, "H2 8100"): only **operation 0**. It's 8100 WORD PROCESSING with English
+system messages and hyphenation, **COMMUNICATIONS TTY** with English communications keywords,
+and printer type STANDARD (Rotary IV–IX). Its features:
+- Keyboard to Printer, and Control Page Printing with Footnotes and Output to Disk.
+- "All of the following": Move, Screen Sort, Text Insertion, Search/Locate/Replace, DU30.
+- "ESTIMATED: WORKBLOCKS 37 MEMORY PORTIONS USED 113".
+
+The page ends "THE OPERATION HAS BEEN WRITTEN TO THE PROGRAM DISK."
+
+**What this tells us:**
+- **Move** and **Text Insertion** are in every operation, so the MOVE and INSERT keys should
+  work in the running system. They haven't been identified yet ("The editor's key
+  dispatch").
+- **MathPak** (operation 0 on cpt.img only) is a likely match for the missing segment 56
+  (38H), which keys 01H, 1CH and 4CH and CODE + 01H call. cpt2489 has no MathPak, and
+  segment 56 isn't present there either.
+- **Spelling Verifier** (operation 1) fits the `LEX` dictionary document.
+- **Communications TTY** is segment 43 (2BH) on cpt2489.
+- **Which segments make up a feature** can be found by comparing the segment maps of
+  operations 0 and 1. That comparison hasn't been done yet (the run was stopped).
+
+**Not yet done:**
+- The segment maps of operation 1 against operation 0.
+- What operation 1's second chime is.
+- Whether the operation's features are read from the `OP` page or built into the sectors
+  that operation loads.
+
+## Disk utilities (DU30?) **[the messages CONFIRMED; the utilities' code is NOT on these disks]**
+
+Per the user, CPT had a way to erase a data disk. cpt2489 has a whole disk-utility suite
+in its message file; cpt.img has none of it.
+
+**The text** (cpt2489, logical sectors 655–664, among Screen Sort's strings):
+- **DISK ERASURE:** "----- WARNING -----", "ALL INFORMATION ON DISK WILL BE DESTROYED",
+  "Please insert the disk to be erased", "Insert any additional disks to be erased",
+  "The disk in station# cannot be erased", "- ERASURE COMPLETED -".
+- **PAGE ERASURE:** "Please select the type of erasure", "Please enter the page range to be
+  erased", "The specified page does not exist", "PAGE ERASED:", "Would you like to continue
+  page erasure?".
+- **DISK DUPLICATION** ("Please place a BLANK disk in station 2", "The disk CANNOT be
+  duplicated"), **DISK RECONSTRUCTION**, **DISK BACKUP** and **DISK RESTORE** (also to a tape
+  cartridge: "Please place a cartridge in backup unit", "Please assign a name to the backup
+  tape").
+- **SRS:** SRS DISK BACKUP, SRS DISK RESTORE, SRS REMOTE SYSTEM LOAD, and "To open a section,
+  use the SRS Key". SRS is also a destination in CODE + PRINT's `PRINTER A B C SRS` on this
+  disk. It's probably CPT's shared-resource network [HYPOTHESIS].
+- "PLEASE SELECT THE NEXT OPERATION", and the Screen Sort messages ("SORTING CANNOT PROCEED",
+  "Sorting Finished", "The record is too large", "Arranging").
+- "Something is wrong with the IN instruction in the control page" (and the same for OUT).
+
+**Its format** is not the numbered messages' (`3.01`, `6.53`, …). It's a string table: 4-byte
+entries (id low, id high, offset low, offset high) ending `00 00`, then the strings, each
+ending CR. DISK ERASURE is id 012DH of its group. The ids overlap the system's message
+numbers (012DH = 301 = message 3.01, a P-page message), so they're local to the program that
+uses them.
+
+**DU30** is in the feature lists of both disks' operation 0 ("Operations"). Its strings
+sitting next to Screen Sort's suggest it's **Disk Utilities** [HYPOTHESIS]. But cpt.img lists
+DU30 and has none of this text, so that's unconfirmed.
+
+**What doesn't start them** [CONFIRMED by running cpt2489, with `--brk-read L660` (the erase
+strings) after start-up]:
+- **Keys:** CODE + X, OUT, PRINT, STOP, SKIP, HOLD, ADJ, D, E, V, W. Keys 0DH, 01H, CODE +
+  0DH and CODE + 01H (nothing on this disk).
+- **Operations:** CODE + O 1, 9 and 19. The boot code keeps only 0–19 (`STA 00D8H`; stage 2
+  clamps 20 and up to 0), and cpt2489 has only operation 0.
+- **Keys held at power-up:** CODE, STOP, SHIFT, LOCK.
+- **A control page** whose keyword line is `DISK ERASURE.`, filed with OUT and run with
+  CODE + I. CODE + I treats every page as a communications control page and shows
+  "INITIALIZATION INCOMPLETE".
+
+Not yet tried: keys 1CH, 4CH and 5CH, and CODE + staple.
+
+**Where the code might be:**
+- Neither the strings nor code using them is in memory during a normal session.
+- The boot reads the region they're in, but the code is relocated as it loads, so on-disk
+  bytes don't match memory.
+- The text is segment 30, a message module, not an overlay of code (see below). The code
+  that would use it isn't on these disks.
+
+**Three number spaces overlap, so searching for a number in the code misleads.** Each of
+these has its own ids, and the same 16-bit value can mean different things:
+1. **Numbered messages**, shown by far call 29.01 with DE = the number (e.g. 028DH = 6.53).
+   The resident ones are at block 0 D740H on cpt2489, followed by a (number, location) table
+   for those kept on disk. The on-disk entries are [number low][number high], optionally the
+   number as text (`6.53`) and A1H, then the text, ending 00.
+2. **Prompt strings** (the title-line menus such as `LINE LIMIT`, `PRINTER A B C SRS`,
+   `=Yes =No`), passed in DE to a prompt routine. For example, segment 40's menu function
+   28.03 (A25DH on cpt.img) dispatches on A (00D0H) and calls A7BCH with DE = 02BDH or 02BEH.
+   Those are the CODE + PRINT and CODE + OUT prompts, not messages 7.01/7.02. The resident
+   prompts are in segment 42's area (block 0, B7xxH–BBxxH on cpt2489).
+3. **The utility string table** (above), with its own 4-byte index.
+
+**Keys into segment 40 (28H)** [CONFIRMED by the dispatch tables]:
+- CODE + OUT is editor index 2AH, CAADH → 28.03, which shows `LINE LIMIT 0`.
+- CODE + PRINT is index 20H, CA77H → 28.03, which shows `PRINTER A B C`.
+- CODE + O is index 36H → 28.05; STOP (index 03) → 28.02; index 31H → 28.06.
+- 28.04 is reached from indices 38H and 60H, whose keys aren't known.
+
+`tools/cptkeys.py` prints the CODE + function-key table's values 01H–03H as "(no key)". They
+are the function codes of IN, OUT and PRINT (A1H–A3H).
+
+**How prompts and string tables are found** [CONFIRMED by disassembly, cpt2489]:
+- **29.03 shows a prompt** (B595H). It calls 2A.01 with A = 2 for the table's address, then
+  walks a chain of entries [length low][length high][id low][id high][text …], stepping by
+  each length until the id in DE matches. A zero length means not found (error 2).
+- **2A.01 takes a table number 0–12** (BFB8H) and returns its address from a pointer list at
+  BFE3H:
+
+  | Table | Address | What it is |
+  |---|---|---|
+  | 0 | C736H | |
+  | 1 | D796H | the numbered-message directory |
+  | 2 | B6E8H | the title-line prompts |
+  | 3 | BFFDH | `TEXT:`, `VARIABLE:` … |
+  | 4 | C12CH | |
+
+  For a null entry (tables 5–12) it asks far call **26.00**, which returns the address from a
+  second list at 9F5DH:
+
+  | Table | Address | What it is |
+  |---|---|---|
+  | 5 | A6FAH | |
+  | 6 | A85BH | |
+  | 7 | A188H | |
+  | 8 | 9F75H | the code-set prompts `C0-9:` … `C250-255:` |
+  | 9 | A379H | |
+  | 10 | A4CDH | |
+  | 11, 12 | null | |
+
+- **Segment 38 (26H)**, present only on cpt2489, is therefore the communications and code-set
+  prompt tables. On cpt.img it's absent, so tables 5–12 don't exist there.
+- **All of these tables are resident.** There's no loader for string tables from disk, and
+  none of the tables holds the utility strings.
+
+**The utility text is segment 30 (1EH), a message module operation 0 never loads**
+[CONFIRMED from the disk and by disassembly; corrects an earlier reading of it as a program]:
+- **Every code module on the disk starts with a header.**
+
+  | Bytes | Contents |
+  |---|---|
+  | +0–3 | `00 00 00 00` |
+  | +4 | **segment number** |
+  | +5 | `01` |
+  | +6–7 | size (2 bytes) |
+  | +8–10 | 3 bytes that look like a date or version, e.g. `06 0B 53` |
+  | +14 | **function count** |
+  | +20 on | one 2-byte offset per function |
+
+  The modules the boot loads are exactly the segments in the segment map: 04, 05, 07, 08, 09,
+  0A, 0B, 0E, 12, 13, 14, 23, 28, 29, 2E, 2F, 30, 31, 36, 3A, 3D, 3E, 3F, 1A, 26, 2A, 2B and
+  so on. Segment 35's header, for example, gives 27H = 39 functions, matching the map.
+- **The module** is at logical 655 (track 40), **segment 30 (1EH)**, size 0F95H (3989
+  bytes), 10 functions (offsets in the code part, which starts at module byte 40):
+
+  | Function | Offset | What it is |
+  |---|---|---|
+  | 0 | 0791H | **table lookup**: DE = a message id → HL = the address of its group's table. It divides the id by 100 and indexes a list at 07ACH with the quotient |
+  | 1 | 0000H | **show a message**: HL = id. Looks the string up (function 2) and, if found, displays it through 0F8FH |
+  | 2 | 0010H | **find a string**: HL = id → HL = the string's address, or 0 |
+  | 3 | 013AH | table of ids 0C9H–0EAH (201–234): `DUPLICATION`, "Please select the duplication type", "Please place a BLANK disk in station 2" … |
+  | 4 | 049FH | ids 12DH–14AH (301–330): `DISK ERASURE` |
+  | 5 | 0040H | ids 259H–260H (601–608): `DISK RECONSTRUCTION` |
+  | 6 | 07C6H | ids 191H–19CH (401–412): `DISK BACKUP` |
+  | 7 | 0911H | ids 1F5H–202H (501–514): `DISK RESTORE` |
+  | 8 | 0BD5H | ids 386H–3A1H (902–929): the sort messages |
+  | 9 | 0A73H | ids 4B1H–4BBH (1201–1211): `SRS REMOTE SYSTEM LOAD`, SRS disk backup / restore |
+
+  Each table is entries of `[id low][id high][offset low][offset high]`, ending `00 00`,
+  then the CR-separated strings. The groups are therefore **one per hundred**: 2 duplication,
+  3 erasure, 4 backup, 5 restore, 6 reconstruction, 9 sort, 12 SRS.
+- **It contains no utility logic:** nothing that erases, copies or repairs a disk. The only
+  code is the three helpers above. The display helper (0F8FH) far-calls segment **22H (34)**,
+  which isn't on this disk either.
+- **Nothing refers to it.** Segment 30 isn't in cpt2489's segment table, operation 0's boot
+  doesn't read its sectors, and no code on either disk far-calls segment 1EH. cpt.img has no
+  segment 30 module at all.
+- So segment 30 is the **message module for the disk-utility operations**, the equivalent of
+  the "SYSTEM MESSAGES ENGLISH" setting on the OP page. The operations' code isn't on this
+  disk. The messages are there because they were built into this program disk even though
+  its only operation (0) doesn't use them [HYPOTHESIS].
+- **Other unloaded modules:** an older copy of segment 12 (0CH) at logical 96 (track 6),
+  and a second version of segment 19 (13H) at logical 574 (tracks 35–38, with its relocation
+  list at 614, which looked like a page named "F").
+
+**How a CPT user reached them** (per a description the user found online): CODE + O with
+operation number 1–7:
+
+| Number | Operation |
+|---|---|
+| 1 | word processing |
+| 2 | word processing with less RAM but more printer options |
+| 3, 4 | reserved |
+| 5 | Work Disk Duplication |
+| 6 | Disk Erase |
+| 7 | Work Disk Repair |
+
+That matches segment 30's message groups: DISK DUPLICATION (2), DISK ERASURE (3) and DISK
+RECONSTRUCTION (6, "Work Disk Repair"), plus backup (4), restore (5), sort (9) and SRS (12).
+
+**On cpt2489, CODE + O 5, 6 and 7 all boot the normal editor** [CONFIRMED by running it, with
+`--brk-read L655`]:
+- They're identical to each other and to 1, 9 and 19: 656 reads, then the same screen.
+- Any non-zero number takes one path. The boot reads t3s5–6 (code with a relocation list)
+  instead of operation 0's t5s5–6.
+- It then reads logical 911–912, right before `OP.00.0`. These hold binary tables of
+  (number, address) entries naming segments such as 3DH, 3EH, 3FH, 04H and 1AH, which looks
+  like an operation's module list [HYPOTHESIS].
+- After that it loads the same main system as operation 0. The utility module is never read.
+
+So the operation lookup finds no definition for 5–7 and falls back. cpt2489 was built with
+only one operation ("BUILD AN OPERATION … OPERATION 0"). It carries segment 30's messages,
+but not the operations' code. [HYPOTHESIS: the fallback reading.] Whether "1" in that numbering
+is the disks' operation 0 isn't known.
+
+**The operation table and load maps** [CONFIRMED by disassembly of boot stages 2 and 3]:
+- **Stage 2** (track 1 sector 1 at 0100H) clamps the operation number to 0–19 and reads
+  the disk label into page 0. Label bytes 15H–16H give the stage-3 location: track 1 sector
+  4, giving t1s4–15 at 6000H. It jumps there with A = the operation number.
+- **Stage 3** keeps the number at 61A4H. Its lookup (6141H) reads an **operation table at
+  6B00H** (track 1 sector 15), 8 bytes per operation:
+  - Byte 0 is non-zero if the operation exists (probably its module count). It goes to
+    61A5H, and the boot later checks it against 81H.
+  - Bytes 1–4 are copied to 61A8H. Bytes 3–4 are the **logical sector of the operation's
+    load map**.
+  - The byte before the table (6AFFH) goes to 61A2H.
+  - **A missing operation falls back to operation 0**. If 0 is missing too, it's error 5.
+
+  | Disk | Operation | Entry | Load map |
+  |---|---|---|---|
+  | cpt.img | 0 | `21 00 00 02 24 00 00 00` | logical 548 (t34s0) |
+  | cpt.img | 1 | `1C 00 00 03 75 00 00 00` | logical 885 |
+  | cpt2489 | 0 | `22 00 00 03 8F 00 00 00` | logical 911 |
+
+  cpt2489 has no other operations, so CODE + O 5, 6 and 7 run operation 0. That's why they
+  all read logical 911.
+- **A load map** is a 16-byte header, then one 12-byte entry per module. There are as many
+  entries as the operation's count byte: 22H = 34 for cpt2489's operation 0. The module
+  loader (61ACH) reads header and entries, then for each entry copies it into a disk
+  request (664AH: drive, then entry bytes 0–3, so bytes 2–3 are the sector), reads the
+  module's header, and loads it [CONFIRMED by disassembly and by checking every entry]:
+
+  | Bytes | Contents |
+  |---|---|
+  | 0–1 | `00 00` |
+  | 2–3 | **logical sector of the module, big-endian** |
+  | 4 | **bank byte**: 0 = bank 0, b = block b − 1 (`OUT 03H`) |
+  | 5–6 | **function-table address** (the segment map's "table") |
+  | 7 | a byte (01 for segment 36H, otherwise 00) |
+  | 8–9 | a second address, probably the module's bank-0 data area [HYPOTHESIS] |
+  | 10 | **segment number**: must equal the module header's +4, or it's error 6 |
+  | 11 | **format flag**: must equal the header's +5 (01 for normal modules), or it's error 6 |
+
+  - Entries for segments 01, 02 and 25 have flags 05 and 02 and no module header at their
+    sector. That's another format, not checked here.
+  - Every other entry's sector holds that segment's module, e.g. 05 → 60, 23 → 259,
+    29 → 337, 3D → 453, 2B → 875.
+  - Segment 30 (1EH) isn't in the map.
+- **The segment check means a module can only be loaded as its own segment.** The utility
+  module (header segment 1EH) can only be segment 30.
+- **How the main program starts:**
+  1. Stage 3 jumps to 0040H with A = the operation number.
+  2. Start-up (0D98H) stores the number at **0E71H**, runs its init list (0E65H) and starts
+     the timers. Then, with H = the operation number, it far-calls **07.00** (13D4H).
+  3. Segment 07's function 00 (1CF1H) puts a non-zero operation number into the 0395H text
+     buffer, then far-calls a fixed list of start-up hooks: **04.00** (the main program),
+     44.08, 0E.05, 49.00, 43.00, 22.01, 1F.00, 20.00, 21.00, 19.00, 69.00, 41.0D, 46.03,
+     33.00, 7A.02, 78.02, 1C.00. A missing segment's hook just returns.
+  4. **Segment 04** is a tiny module (two copies on the disk, at logical 58 and 528, both the
+     same) that far-calls **23.17**, the editor's command level.
+
+  Segment 1EH isn't in the hook list, and no code on either disk far-calls it.
+
+**The experiment that was planned, and why it was dropped.** The plan was to add an
+operation 6 to a copy of cpt2489 (a load map with segment 1EH added, plus a copy of segment
+04 that calls it instead of the editor). Reading the module showed it can't work: segment
+30 is only messages, so there is no program to start. Calling it would at most display text,
+and its display helper needs segment 22H, which this disk doesn't have either. Nothing was
+patched or booted. (The load-map format above, decoded for this plan, is still right.)
+
+**Where the utilities' code must be** [HYPOTHESIS]:
+- **Not on cpt.img or cpt2489.** Their load maps and every module on both disks have been
+  checked; the code that erases, duplicates or repairs a disk isn't among them.
+- **Operations 5–7 (and 3–4) were separate builds,** with their own load maps and launcher
+  modules, probably on a utility program disk. cpt2489's start-up hook list names many
+  segments that aren't on it (1CH, 1FH, 20H, 21H, 22H, 33H, 41H, 43H, 44H, 46H, 49H, 69H,
+  78H, 7AH), which are optional features and options not built into this operation.
+- **To get them:** a disk image with those operations, such as a work-disk utility or
+  "operations" disk. cpt.td0, cpt2365.td0 and cpt2489.td0 aren't it.
+
+**Next steps:**
+- Look for another CPT disk image with operations 5–7. If one turns up, its segment-30-style
+  message module and operation table should match this format.
+- Indices 38H and 60H (28.04), whose keys aren't known yet.
+
+## Control pages **[CONFIRMED from the documents; partly by running them]**
+
+A control page is a document that tells a function how to run. Its first line is a title,
+and the next line names the function:
+- `CTTY`, `TRT`, `TRT1`: `COMMUNICATIONS.` (rate, code sets, lines per page, parity). CODE +
+  I, then the name, runs them (see `segments-cpt2489.md`).
+- `CONTROL`: "CONTROL PAGE FOR MAILBOX / TRANSMISSION FROM KP/SCREEN / TRANSMISSION FILE: 2
+  MAILBOX".
+- Screen Sort and the disk utilities mention IN and OUT "instructions in the control page", so
+  their control pages have IN/OUT lines too [HYPOTHESIS].
+
+## Filing a document with OUT **[CONFIRMED by running it]**
+
+On both disks, typing two lines, pressing OUT, typing a name and RETURN files the page.
+IN with the same name then brings it back ("TEST" on the typing line, "hello world" below).
+OUT reads the allocation map (t0s3), a directory sector and a leaf before writing. Filing to
+a disk in station 2 and rebooting with the saved image shows the page survives ("Data disks"
+below). Filing to station 1, the program disk, was only tested within one session.
+
+**CODE + I is for communications only.** Running a page that isn't a valid communications
+control page with CODE + I (e.g. a page whose keyword is `DISK ERASURE.` or `XYZZY.`) shows
+**INITIALIZATION INCOMPLETE**. That's a communications message: it sits between "TTY
+COMMUNICATIONS ENABLED" and "COMMUNICATIONS DISABLED" in the message file.
+
+## Data disks (station 2) **[CONFIRMED by running it]**
+
+A second disk in station 2 holds documents. It uses the program disk's filesystem, with
+less on it. `python tools/mkdatadisk.py OUT.img` makes a blank one, and `cpt-run --cpt-boot
+… --disk2 OUT.img --save-disk2 NEW.img` mounts it and saves it back.
+
+**Choosing the station.** The IN and OUT prompts show the station as a digit (`OUT        1
+name`). Typing a digit just lands in the name. To change the station, **backspace twice
+over the digit and type the new one**: `{2D}{06}{06}2zz{14}` gives `OUT        2 ZZ`. (Backspace
+here only moves the cursor back.) A `2:name` prefix is rejected by OUT as an improper
+character in the page label (message 6.53). IN with a `n:name` prefix was read in the code
+(F120H, drive = the digit − 1) but not run [VERIFY].
+
+**An unformatted disk is formatted by the first write.** A blank disk of all zeros in
+station 2, OUT to it, wrote exactly four sectors: the label, the allocation map, the
+directory root and the page's first block. IN then read the page back. The same page filed
+to the formatted-but-empty disk below gives a byte-identical disk.
+
+**The formatted, empty data disk** (what `mkdatadisk.py` makes; all other sectors zero):
+
+| Sector | Contents |
+|---|---|
+| t0s0 (label) | only 16 bytes: `00 01 01 02 00 04 D0 00 00 01 00 00 0F 00 00 00`. The program disk's label has `05` at +1 and `01` at +0FH, and a geometry block, a text and more after +10H. +5..6 = 04D0H = 1232 sectors |
+| t0s3, t0s6 (allocation map) | 2 bits per logical sector (0 free, 1 reserved, 2 data, 3 system/index). Logical 0–15 (track 0) are reserved (`55 55 55 55`), the rest free. The system writes no padding past the last sector (the program disk has it) |
+| t0s13 (directory root) | a **leaf** (`30`, ASCII '0') with no entries. The first 23-byte item slot stays empty, as in the program disk's leaves |
+
+**After the first page,** filed as `ZZ` (24 bytes):
+- The map marks logical sector 16 (**t1s2**, by the skew rule) as 3 (system/index), and
+  holds the page's `01 ZZ 02 C0 … 03` block.
+- The root leaf gets an item in its second slot: the name padded to 16, the field
+  (`00 01 00 18`: length 24) and the pointer `00 00 10` (logical 16).
+- Only t0s3, t0s13 and t1s2 changed. The label was already there.
+
+**Directory depth:** a one-leaf root is enough for a few pages. When it fills, the system
+must split it into an inner root (level `1`) with leaves in the data area, as the program
+disk has. That hasn't been exercised [VERIFY].
+
+**It persists.** Saved with `--save-disk2` and mounted again after a fresh boot, IN 2 ZZ
+brings the page back (boot test `a_blank_data_disk_takes_a_page_and_keeps_it`).
 
 ## Patch pages **[CONFIRMED by disassembly and by running it; syntax details HYPOTHESIS]**
 
@@ -621,6 +1030,19 @@ $11
 - Offsets are relative to the segment's base, the address `cptsegs.py` prints as the
   table, so a real patch would be computed from the segment's code. The values here are
   placeholders, chosen only to show the syntax.
+
+**The system's own messages about patch pages** [CONFIRMED from the message file, both
+disks]:
+- 3.01 is "P PAGE DOES NOT MATCH SOFTWARE LEVEL. P PAGE DID NOT LOAD." So the five
+  characters after `!` are the **software level** the page was written for.
+- 3.02 is "P PAGE HAS BEEN ALTERED. P PAGE DID NOT LOAD." That's the checksum failing.
+
+**The same syntax holds printer tables.** The `TP` document on cpt2489 ("tp.50045 rev [gen:8]
+usa 88 … v2.07 … This Printer Table should be written to page label "TP" of the program
+disk") is a `!` line followed by `@( … )` groups of decimal numbers (character widths). So
+the `!`/`@` interpreter is the system's general loader for tables kept as pages, and patch
+pages are one use of it. In `@(`, a group with no address, the values seem to go to the
+table being loaded [HYPOTHESIS].
 
 **Later reuse of 0395H.** At 42.6M cycles (cpt.img) a different routine (36E0H–37FEH) builds
 a volume ID in the same buffer: the label's 16-character name, then `-` and three numbers

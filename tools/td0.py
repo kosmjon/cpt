@@ -271,6 +271,16 @@ def parse(blob):
     return info, tracks, pos
 
 
+def raw_image(tracks):
+    """A flat image of the parsed tracks: cylinder/head order, each track's sectors sorted by
+    sector number (a sector with no data, flagged skipped, is zeros)."""
+    out = bytearray()
+    for t in sorted(tracks, key=lambda t: (t["cyl"], t["head"])):
+        for s in sorted(t["sectors"], key=lambda s: s["r"]):
+            out += s["data"] if s["data"] is not None else bytes(s["size"])
+    return bytes(out)
+
+
 def flag_names(f):
     return ",".join(v for k, v in SECTOR_FLAGS.items() if f & k) or "-"
 
@@ -326,10 +336,7 @@ def main(argv):
             print("%21s flags: %s" % ("", "; ".join(odd)))
 
     if raw_out:
-        out = bytearray()
-        for t in sorted(tracks, key=lambda t: (t["cyl"], t["head"])):
-            for s in sorted(t["sectors"], key=lambda s: s["r"]):
-                out += s["data"] if s["data"] is not None else bytes(s["size"])
+        out = raw_image(tracks)
         open(raw_out, "wb").write(out)
         print("\nwrote %s (%d bytes, sectors sorted by number within each track)" % (raw_out, len(out)))
     if json_out:
