@@ -74,6 +74,37 @@ async function main() {
   requestAnimationFrame(render);
 }
 
+// Put a page's text on a sheet. The printout marks each underlined character with a following
+// combining low line (U+0332); runs of those become one underlined span, so the underline is
+// continuous across letters and spaces, as on the paper.
+const UNDERLINE_MARK = "\u0332";
+function fillSheet(sheet, text) {
+  const run = (s, underlined) => {
+    if (!s) return;
+    const span = document.createElement("span");
+    if (underlined) span.className = "ul";
+    span.textContent = s;
+    sheet.append(span);
+  };
+  let plain = "";
+  let under = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === UNDERLINE_MARK) continue;
+    if (text[i + 1] === UNDERLINE_MARK) {
+      run(plain, false);
+      plain = "";
+      under += ch;
+    } else {
+      run(under, true);
+      under = "";
+      plain += ch;
+    }
+  }
+  run(under, true);
+  run(plain, false);
+}
+
 // Printer A: the printout as sheets of paper, redrawn whenever the CPT has sent more, so the
 // document appears line by line (the CPT sends about 110 characters a second). Pages are
 // separated by form feeds in the text. The paper follows the print head unless you have
@@ -128,11 +159,11 @@ function setupPrinter(ws) {
       const sheet = document.createElement("div");
       sheet.className = "sheet";
       sheet.setAttribute("aria-label", `page ${i + 1}`);
-      sheet.textContent = page;
-      if (i === pages.length - 1) {
-        // The print head sits after the last character struck (not after the line's
-        // newline). It shows only while printing, but marks the spot to follow either way.
-        sheet.textContent = page.replace(/\n+$/, "");
+      // The print head sits after the last character struck (not after the line's newline).
+      // It shows only while printing, but marks the spot to follow either way.
+      const last = i === pages.length - 1;
+      fillSheet(sheet, last ? page.replace(/\n+$/, "") : page);
+      if (last) {
         head = document.createElement("span");
         head.className = "print-head";
         if (!printing) head.style.visibility = "hidden";

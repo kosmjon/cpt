@@ -211,7 +211,9 @@ The module's side: after each run it moves the printer's commands to a log kept 
 system (`cpt_real_printer_version` changes when there is more), and `cpt_real_printout`
 renders the log as text into the transfer buffer, through the print-wheel table it reads
 from the system's memory. `cpt_real_printer_clear` and `cpt_real_printer_set_on` are the
-buttons. Bold, underline and the wheel's special characters print as plain characters.
+buttons. Underlined text is underlined on the paper (the printout marks it with combining
+low lines, U+0332, which SAVE keeps). Bold and the wheel's special characters print as plain
+characters.
 
 How it works:
 - `cpt_run_frame` leaves the frame's speaker events in a buffer of f64 pairs (CPU cycle,

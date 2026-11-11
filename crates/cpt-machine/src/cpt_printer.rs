@@ -275,14 +275,31 @@ fn text_char(code: u8) -> char {
     }
 }
 
+/// Combining low line: follows each underlined character in [`render_text`]'s output.
+pub const UNDERLINE: char = '\u{0332}';
+
+/// One column of a printed line: the character struck there, and whether it is underlined.
+#[derive(Clone, Copy)]
+struct PrintCell {
+    ch: char,
+    underline: bool,
+}
+
+const BLANK: PrintCell = PrintCell { ch: ' ', underline: false };
+
 /// Lay the printer's commands out as plain text pages: each character goes in the column and
 /// line its carriage and paper position fall in (6 units per column, 8 per line). A restore
 /// after something was printed starts a new page; pages are separated by a form feed (0CH).
-/// Underscores struck over a character (underlining) are dropped; any other overstrike that
-/// lands on a used column moves to the next free one.
+///
+/// Underlining: the CPT prints it as an underscore struck at each underlined position,
+/// spaces included (JP-M24's `M E M O R A N D U M`). An underscore struck over a character,
+/// or a character struck over an underscore, marks that column underlined, and the output has
+/// a combining low line ([`UNDERLINE`], U+0332) after it, so the underline is continuous; an
+/// underscore on a blank column is an underlined space. Any other overstrike that lands on a
+/// used column moves to the next free one.
 pub fn render_text(log: &[PrinterCommand], wheel: &PrintWheel) -> String {
-    let mut pages: Vec<BTreeMap<i32, Vec<char>>> = Vec::new();
-    let mut page: BTreeMap<i32, Vec<char>> = BTreeMap::new();
+    let mut pages: Vec<BTreeMap<i32, Vec<PrintCell>>> = Vec::new();
+    let mut page: BTreeMap<i32, Vec<PrintCell>> = BTreeMap::new();
     let (mut x, mut y) = (0i32, 0i32);
     let signed = |w: u16| {
         let n = (w & 0x3FF) as i32;
@@ -313,17 +330,25 @@ pub fn render_text(log: &[PrinterCommand], wheel: &PrintWheel) -> String {
             if ch == ' ' {
                 continue;
             }
+            if line.len() <= col {
+                line.resize(col + 1, BLANK);
+            }
+            if ch == '_' {
+                // Underlining: whatever is in this column (a character, or nothing yet).
+                line[col].underline = true;
+                continue;
+            }
             loop {
                 if line.len() <= col {
-                    line.resize(col + 1, ' ');
+                    line.resize(col + 1, BLANK);
                 }
-                let here = line[col];
-                if here == ' ' || here == '_' {
-                    line[col] = ch;
+                let here = line[col].ch;
+                if here == ' ' {
+                    line[col].ch = ch;
                     break;
                 }
-                if ch == '_' || here == ch {
-                    break;
+                if here == ch {
+                    break; // struck again (bold): the same character
                 }
                 col += 1;
             }
@@ -340,9 +365,13 @@ pub fn render_text(log: &[PrinterCommand], wheel: &PrintWheel) -> String {
         let last = page.keys().next_back().copied().unwrap_or(0);
         for row in 0..=last {
             if let Some(line) = page.get(&row) {
-                out.extend(line.iter());
-                while out.ends_with(' ') {
-                    out.pop();
+                // Trailing blanks go, but not underlined ones (they are part of the underline).
+                let end = line.iter().rposition(|c| c.ch != ' ' || c.underline).map_or(0, |i| i + 1);
+                for cell in &line[..end] {
+                    out.push(cell.ch);
+                    if cell.underline {
+                        out.push(UNDERLINE);
+                    }
                 }
             }
             out.push('\n');
@@ -426,6 +455,28 @@ mod tests {
         block[0x10..0x1A].copy_from_slice(&[0xCD, 0xEE, 0x00, 0x21, 0x00, 0x81, 0xFE, 0x02, 0xC2, 0x00]);
         block[0x100..0x108].copy_from_slice(&[0x20, 3, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00]);
         assert_eq!(PrintWheel::find(&block).unwrap().code_for(0xFFFD), Some(0x21));
+    }
+
+    #[test]
+    fn underscores_struck_over_text_underline_it_continuously() {
+        // A wheel with 'A' (0001), ' ' (0002) and '_' (0003) at codes 41H, 20H, 5FH.
+        let mut t = vec![0x20u8, 0x40];
+        for code in 0x20..0x60u8 {
+            let w: u16 = match code { 0x41 => 1, 0x20 => 2, 0x5F => 3, _ => 0 };
+            t.extend_from_slice(&w.to_le_bytes());
+        }
+        let w = PrintWheel::from_table(&t).unwrap();
+        let ch = |word: u16| PrinterCommand { strobe: STROBE_CHARACTER, word: !word };
+        let car = |word| PrinterCommand { strobe: STROBE_CARRIAGE, word };
+        // "A A" struck, back to the start, then "___" over it (the spaces too), then a plain "A".
+        let log = vec![
+            ch(1), car(6), car(6), ch(1), car(6),
+            car(0x400 | 18), ch(3), car(6), ch(3), car(6), ch(3), car(6), car(6), ch(1),
+        ];
+        let u = UNDERLINE;
+        assert_eq!(render_text(&log, &w), format!("A{u} {u}A{u} A\n"));
+        // An underscore on its own is an underlined blank, kept at the end of the line.
+        assert_eq!(render_text(&[ch(1), car(6), ch(3)], &w), format!("A {u}\n"));
     }
 
     #[test]

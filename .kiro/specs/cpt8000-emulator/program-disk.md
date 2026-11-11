@@ -1168,6 +1168,11 @@ then two bytes per code, sent complemented. Both disks use the last (from 20H, 9
   off (bit 7 clear) loads nothing.
 - `PrintWheel::find` reads the table from memory; `render_text` lays the characters out by
   carriage and paper position (6 units per column, 8 per line), a form feed between pages.
+- **Underlining** is a second strike: the CPT strikes an underscore at each underlined
+  position, spaces included [CONFIRMED by printing JP-M24's `M E M O R A N D U M`].
+  `render_text` turns an underscore on a column into "this column is underlined" (a combining
+  low line, U+0332, after its character), so the underline is continuous; the printer pane
+  draws those runs underlined.
 - `cpt-run --cpt-boot` reports the printer and shows the printout. `--printer-text <file>`
   saves it, `--printer-log <file>` saves the raw commands, `--printer-status 00` unplugs it.
 - `--watch-io 42-45` logs every IN and OUT on those ports with the instruction that did it
