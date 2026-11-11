@@ -103,6 +103,7 @@ did; the CPT software tracks its own SHIFT, LOCK and CODE.
 | Backspace | backspace |
 | ↓ / ↑ | CPT DOWN / UP (by the selected unit, or a line) |
 | Esc | SKIP |
+| Tab | TAB (always: the page doesn't use Tab to move between its buttons) |
 | Delete | ERASE (blanks the character under the cursor and moves on) |
 | Insert | nothing yet: the CPT's INSERT key isn't identified |
 | `\` | the CPT's `|` / `\` key |

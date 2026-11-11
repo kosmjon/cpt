@@ -214,9 +214,15 @@ async function tap(code) {
 // Wait for main() to start (it awaits fetch + instantiate, which is slow on a busy machine).
 for (let i = 0; i < 1000 && !rafCallback; i++) await sleep(10);
 await frames(3);
-// Powered up, idle: a black screen, waiting for a program disk in drive 1 (no demo).
+// Powered up, idle: a black screen, waiting for a program disk in drive 1 (no demo), with
+// "PLEASE INSERT A PROGRAM DISK" white on black in the middle: row 27 of 54, columns 27-54.
+function insertMessageShown() {
+  const msg = "PLEASE INSERT A PROGRAM DISK";
+  const col = Math.floor((80 - msg.length) / 2);
+  return rowText(26) === " ".repeat(col) + msg && ctx.fillStyle === "#e8f0f0" && frameText.size === msg.replace(/ /g, "").length;
+}
 assert.equal(background, "#000000", "a black screen");
-assert.equal(frameText.size, 0, "nothing on it");
+assert.ok(insertMessageShown(), `the message, centred (row 27: "${rowText(26)}")`);
 assert.equal(status.textContent, "insert a CPT program disk in drive 1");
 assert.ok(powerBtn.sub[".led"].classList.contains("on"), "the power LED is on");
 assert.equal(drives[0].classList.contains("loaded"), false);
@@ -422,7 +428,7 @@ await frames(1);
 await key("Escape", false);
 assert.ok(escKept, "Esc is taken by the page (preventDefault)");
 
-// Tab: the CPT's TAB while the screen has focus; on a button it is left to the browser.
+// Tab: always the CPT's TAB, wherever the focus is (the page keeps it from the browser).
 function tabDown() {
   let kept = false;
   for (const f of windowListeners.keydown || []) {
@@ -430,14 +436,11 @@ function tabDown() {
   }
   return kept;
 }
-document.activeElement = canvas;
-assert.ok(tabDown(), "Tab on the screen goes to the CPT");
-await key("Tab", false);
 document.activeElement = resetBtn;
-assert.ok(!tabDown(), "Tab on a button moves the focus as usual");
+assert.ok(tabDown(), "Tab goes to the CPT even with a button focused");
 await key("Tab", false);
 document.activeElement = undefined;
-console.log("Tab: the CPT's TAB on the screen, focus movement elsewhere");
+console.log("Tab: always the CPT's TAB");
 for (let i = 0; i < 80 && findRow(/\S/, 47, 54) !== undefined; i++) {
   await sleep(100);
   await frames(1);
@@ -451,13 +454,20 @@ await drives[0].sub[".drive-btn"].dispatch("click");
 await frames(2);
 assert.equal(drives[0].classList.contains("loaded"), false, "drive 1 is empty");
 assert.ok(status.textContent.startsWith("CPT system running"), `still running: ${status.textContent}`);
-// (Only that the ruler is still there: a frame can catch the system redrawing it.)
-assert.ok(allDark(46) && rowText(46).includes("....|....") && frameMarks.size > 0, `with its screen: "${rowText(46)}"`);
+// (Only that the ruler is still there. A single frame can catch the system redrawing it, so
+// give it a few frames.)
+const rulerThere = () => allDark(46) && rowText(46).includes("....|....") && frameMarks.size > 0;
+for (let i = 0; i < 40 && !rulerThere(); i++) {
+  await sleep(50);
+  await frames(1);
+}
+assert.ok(rulerThere(), `with its screen: "${rowText(46)}"`);
 
 // RESET with drive 1 empty: the system stops and the screen goes black, waiting for a disk.
 await resetBtn.dispatch("click");
 await frames(2);
 assert.equal(background, "#000000", "reset, no disk: a black screen");
+assert.ok(insertMessageShown(), `reset, no disk: the message (row 27: "${rowText(26)}")`);
 assert.equal(status.textContent, "insert a CPT program disk in drive 1");
 
 // POWER off: a dark tube; a disk inserted while off waits in its drive.

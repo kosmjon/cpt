@@ -32,11 +32,6 @@
       }
       /* The page-white screen; the canvas paints into it. A slight inner glow + rounding reads
          as a CRT face. */
-      /* The screen takes the focus (Tab is the CPT's TAB there); a soft ring shows it has it. */
-      #screen:focus-visible {
-        outline: 2px solid rgba(210, 170, 90, 0.6);
-        outline-offset: 3px;
-      }
       #screen {
         display: block;
         border-radius: 6px;
@@ -371,7 +366,7 @@
       <div class="case">
         <div class="nameplate">CPT 8000</div>
         <div class="bezel">
-          <canvas id="screen" tabindex="0" aria-label="CPT screen: type here; Tab is the CPT's TAB key while the screen has focus"></canvas>
+          <canvas id="screen" aria-label="CPT screen: the keyboard types into it"></canvas>
         </div>
       </div>
 
@@ -417,7 +412,7 @@
         <button class="power-btn" id="printerTear" title="tear off the printout (clear it)">TEAR OFF</button>
         <button class="power-btn" id="printerSave" title="save the printout as a text file">SAVE</button>
       </div>
-      <div class="paper-feed" id="paperFeed" tabindex="0" aria-label="printout">
+      <div class="paper-feed" id="paperFeed" aria-label="printout">
         <div class="empty">Nothing printed yet. Bring in a document (IN), then PRINT and RETURN.</div>
       </div>
     </section>

@@ -14,6 +14,8 @@ const PAGE = "#e8f0f0"; // the screen's white (slight cyan tint)
 const INK = "#101418"; // its black
 const DOT = "#7a8486"; // the faint dot of a system-inserted blank line
 const GLASS_OFF = "#22272a"; // a powered-off tube
+// Shown while the power is on and nothing is running (no disk in drive 1).
+const INSERT_DISK_MESSAGE = "PLEASE INSERT A PROGRAM DISK";
 
 async function main() {
   const resp = await fetch("cpt_wasm.wasm");
@@ -49,12 +51,20 @@ async function main() {
       ws.speaker.onFrame(ws.powered);
       drawRealScreen(ctx, canvas, real);
       statusEl.textContent = real.settled
-        ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN, Esc = SKIP, Delete = ERASE)"
+        ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN, Esc = SKIP, Delete = ERASE, Tab = TAB)"
         : `starting the CPT system… ${Math.round(real.startProgress * 100)}%`;
     } else {
-      // Powered and idle: a black screen, waiting for a program disk in drive 1.
+      // Powered and not running (drive 1 is empty): a black screen with the message, white on
+      // black, centred in the screen's character cells.
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const cols = Math.round(canvas.width / CELL_W);
+      const row = Math.floor(REAL_SCREEN_ROWS / 2) - 1;
+      const col = Math.floor((cols - INSERT_DISK_MESSAGE.length) / 2);
+      ctx.fillStyle = PAGE;
+      for (let i = 0; i < INSERT_DISK_MESSAGE.length; i++) {
+        if (INSERT_DISK_MESSAGE[i] !== " ") ctx.fillText(INSERT_DISK_MESSAGE[i], (col + i) * CELL_W + 1, row * CELL_H + 1);
+      }
       statusEl.textContent = "insert a CPT program disk in drive 1";
     }
     drives.update();
@@ -484,17 +494,10 @@ function setupKeyboard(ws) {
     releaseLatched();
   }
 
-  // Tab is the CPT's TAB key while the screen has focus (or nothing does); on a button it moves
-  // the focus as usual, so the page stays usable from the keyboard.
-  const screenEl = document.getElementById("screen");
-  function tabIsCpt() {
-    const a = document.activeElement;
-    return !a || a === screenEl || a === document.body || a === document.documentElement;
-  }
-
+  // Every key with a CPT equivalent goes to the CPT, wherever the focus is (Tab included: it is
+  // the CPT's TAB, not focus movement); keys without one are left alone.
   function pcKey(e, down) {
     if (!real.running || e.ctrlKey || e.metaKey) return; // leave browser shortcuts alone
-    if (e.code === "Tab" && !held.has("Tab") && (down ? !tabIsCpt() : true)) return;
     const k = real.keyForPcCode(e.code);
     if (k === null) return;
     e.preventDefault();
@@ -510,10 +513,6 @@ function setupKeyboard(ws) {
   }
   window.addEventListener("keydown", (e) => pcKey(e, true));
   window.addEventListener("keyup", (e) => pcKey(e, false));
-  // Clicking the screen gives it the focus (so Tab is the CPT's).
-  if (screenEl && screenEl.addEventListener) {
-    screenEl.addEventListener("pointerdown", () => screenEl.focus && screenEl.focus());
-  }
   window.addEventListener("blur", releaseAll);
 
   return { press, release, latched, releaseLatched, releaseAll };

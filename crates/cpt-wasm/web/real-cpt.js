@@ -101,7 +101,7 @@ const PC_NAMED_KEYS = {
   ArrowDown: CPT_KEY.DOWN,
   ArrowUp: CPT_KEY.UP,
   Escape: CPT_KEY.SKIP,
-  Tab: CPT_KEY.TAB, // only while the screen (or nothing) has focus; see cpt.js
+  Tab: CPT_KEY.TAB, // always the CPT's TAB (the page doesn't use Tab to move the focus)
   Delete: CPT_KEY.ERASE, // ERASE's key number is a hypothesis (see CPT_KEY.ERASE)
   // Insert: INSERT, once its key number is known (it isn't identified on the real system).
   Backslash: 0x15, // the CPT key with | and \
