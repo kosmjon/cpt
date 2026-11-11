@@ -215,7 +215,7 @@ async function tap(code) {
 for (let i = 0; i < 1000 && !rafCallback; i++) await sleep(10);
 await frames(3);
 // Powered up, idle: a black screen, waiting for a program disk in drive 1 (no demo), with
-// "PLEASE INSERT A PROGRAM DISK" white on black in the middle: row 27 of 54, columns 27-54.
+// "PLEASE INSERT PROGRAM DISK" white on black in the middle: row 27 of 54, columns 28-53.
 function insertMessageShown() {
   const msg = "PLEASE INSERT PROGRAM DISK";
   const col = Math.floor((80 - msg.length) / 2);

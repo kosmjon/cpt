@@ -508,7 +508,7 @@ pub extern "C" fn cpt_real_halt() {
 
 /// Boot a fresh system from the disk in drive 1 (power on, or reset). Any running system is
 /// stopped first. Returns 1 if it booted, 0 if drive 1 is empty (the page then shows "PLEASE
-/// INSERT A PROGRAM DISK", waiting for one).
+/// INSERT PROGRAM DISK", waiting for one).
 #[no_mangle]
 pub extern "C" fn cpt_real_start() -> u32 {
     cpt_real_halt();
