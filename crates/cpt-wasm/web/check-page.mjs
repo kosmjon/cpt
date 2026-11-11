@@ -67,6 +67,7 @@ const CELL_H = 16;
 let frameText = new Map(); // "row,col" -> char
 let frameDark = new Set(); // "row,col" of dark (ink) fills
 let background = ""; // the last frame's whole-screen fill colour
+let frameMarks = new Map(); // "row,col" -> colour of a shape drawn inside that cell
 const ctx = {
   fillStyle: "",
   font: "",
@@ -76,11 +77,15 @@ const ctx = {
     if (x === 0 && y === 0 && w > 700) {
       frameText = new Map();
       frameDark = new Set();
+      frameMarks = new Map();
       background = this.fillStyle;
       return;
     }
-    if (this.fillStyle === "#101418") {
+    if (this.fillStyle === "#101418" && w % CELL_W === 0) {
       for (let c = x / CELL_W; c < (x + w) / CELL_W; c++) frameDark.add(`${y / CELL_H},${c}`);
+    } else if (w < CELL_W) {
+      // A shape inside one cell (a ruler mark, a faint dot): note its cell and colour.
+      frameMarks.set(`${Math.floor(y / CELL_H)},${Math.floor(x / CELL_W)}`, this.fillStyle);
     }
   },
   fillText(t, x, y) {
@@ -253,7 +258,9 @@ assert.ok(status.textContent.startsWith("CPT system running"), status.textConten
   assert.ok(Math.abs(ms(secondOff - second) - 250) <= 10, "the 1000 Hz note lasts 250 ms");
 }
 await frames(1);
-assert.ok(rowText(46).startsWith("^...:....|....:....|"), `ruler drawn: "${rowText(46)}"`);
+// The ruler: the cursor's column mark (drawn as a shape, white) in column 1, then the ticks.
+const rulerDrawn = () => rowText(46).startsWith(" ...:....|....:....|") && frameMarks.get("46,0") === "#e8f0f0";
+assert.ok(rulerDrawn(), `ruler drawn: "${rowText(46)}", column 1 mark ${frameMarks.get("46,0")}`);
 const allDark = (r) => [...Array(80).keys()].every((c) => frameDark.has(`${r},${c}`));
 assert.ok(allDark(46), "the ruler row is white on black");
 assert.ok(allDark(0), "the title line has no black-on-white cells (bug 1)");
@@ -424,7 +431,7 @@ await drives[0].sub[".drive-btn"].dispatch("click");
 await frames(2);
 assert.equal(drives[0].classList.contains("loaded"), false, "drive 1 is empty");
 assert.ok(status.textContent.startsWith("CPT system running"), `still running: ${status.textContent}`);
-assert.ok(rowText(46).startsWith("^...:....|"), "with its screen");
+assert.ok(rulerDrawn(), "with its screen");
 
 // RESET with drive 1 empty: the system stops and the screen goes black, waiting for a disk.
 await resetBtn.dispatch("click");

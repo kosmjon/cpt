@@ -23,6 +23,11 @@
 //!   justification, and one that keeps the words on either side together on a line. It shows
 //!   as a small faint dot (per the user; the browser draws the inserted blank line's dot at
 //!   mid-height and the coded space's a little lower).
+//!   `8D` is a **coded return** [CONFIRMED by disassembly and by typing]: CODE + RETURN's
+//!   handler (B657H, block 2) writes 8D and then ends the line, so the line ends `8D 0D`. On a
+//!   document's first line (C0) or a margin line (B3) it writes no 8D (a plain RETURN). Its
+//!   real glyph is unknown; it shows as a faint arrow pointing left (per the user), one
+//!   column wide.
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
@@ -291,6 +296,9 @@ pub fn glyph(code: u8) -> char {
         // A coded space (CODE + SPACE): a space that justification keeps as it is and that
         // keeps the words either side of it on one line. A small faint dot (per the user).
         0x90 => '·',
+        // A coded return (CODE + RETURN ends the line with 8D before the 0D): a faint arrow
+        // pointing left (per the user; the real glyph is unknown).
+        0x8D => '←',
         _ => '?',
     }
 }
@@ -549,6 +557,14 @@ mod tests {
         assert!(!s.row_is_reverse(0) && !s.row_is_reverse(2));
         assert!(s.row_is_reverse(3), "the format line");
         assert!(s.row_is_reverse(4), "the main ruler");
+    }
+
+    #[test]
+    fn a_coded_return_is_a_left_arrow() {
+        let s = run(0x5000, &[0xC0, b'a', b'b', 0x0D, 0x8D, 0x0D, b'c', 0x8D, 0x0D, 0xB1], 0x5000);
+        assert_eq!(text(&s, 1), "←");
+        assert_eq!(text(&s, 2), "c←");
+        assert_eq!(rev(&s, 2), [false; 2]);
     }
 
     #[test]

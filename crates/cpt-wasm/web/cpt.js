@@ -200,7 +200,9 @@ function drawRealScreen(ctx, canvas, real) {
       }
       const code = s.codes[r * s.cols + c];
       const ch = cptGlyph(code);
-      if (code === 0x80 && !rev) {
+      if (code === 0x83 || code === 0x84 || code === 0x87) {
+        drawRulerMark(ctx, c * CELL_W, y, code, rev);
+      } else if (code === 0x80 && !rev) {
         // A column tick outside a ruler: double spacing's system-inserted blank line, a tiny
         // faint dot (smaller and fainter than a period).
         // At mid-height.
@@ -211,6 +213,14 @@ function drawRealScreen(ctx, canvas, real) {
         // A coded space (CODE + SPACE): the same dot, a little below mid-height.
         ctx.fillStyle = rev ? PAGE : DOT;
         ctx.fillRect(c * CELL_W + 4, y + CELL_H / 2 + 2, 2, 2);
+      } else if (code === 0x8d) {
+        // A coded return (CODE + RETURN): a small faint arrow pointing left, at mid-height.
+        ctx.fillStyle = rev ? PAGE : DOT;
+        const x = c * CELL_W;
+        const m = y + CELL_H / 2;
+        ctx.fillRect(x + 2, m, 7, 1); // the shaft
+        ctx.fillRect(x + 3, m - 1, 1, 3); // the head
+        ctx.fillRect(x + 4, m - 2, 1, 5);
       } else if (ch !== " ") {
         ctx.fillStyle = rev ? PAGE : INK;
         ctx.fillText(ch, c * CELL_W + 1, y + 1);
@@ -226,6 +236,27 @@ function drawRealScreen(ctx, canvas, real) {
       ctx.fillStyle = INK;
       ctx.fillRect((last + 1) * CELL_W, y, (s.cols - last - 1) * CELL_W, CELL_H);
     }
+  }
+}
+
+// The ruler's marks (per the user), in a CELL_W x CELL_H cell at (x, y):
+//   cursor's column (87H) - a wide (7 px) vertical bar with a pointed top
+//   margin (83H, left and right alike) - a narrower, flat-topped vertical bar
+//   tab stop (84H) - a short, narrow T in the lower half of the cell
+// Drawn in the row's light colour (the ruler is white on black).
+function drawRulerMark(ctx, x, y, code, rev) {
+  ctx.fillStyle = rev ? PAGE : INK;
+  if (code === 0x87) {
+    // A 7 px bar under a 3-step point (1, 3, 5 px), centred on x + 4.
+    ctx.fillRect(x + 4, y + 1, 1, 1);
+    ctx.fillRect(x + 3, y + 2, 3, 1);
+    ctx.fillRect(x + 2, y + 3, 5, 1);
+    ctx.fillRect(x + 1, y + 4, 7, CELL_H - 5);
+  } else if (code === 0x83) {
+    ctx.fillRect(x + 3, y + 3, 3, CELL_H - 4);
+  } else {
+    ctx.fillRect(x + 3, y + 8, 4, 1); // the T's bar
+    ctx.fillRect(x + 4, y + 9, 2, CELL_H - 11); // its stem
   }
 }
 

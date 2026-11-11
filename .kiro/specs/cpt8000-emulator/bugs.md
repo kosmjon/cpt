@@ -16,9 +16,17 @@
     shows as a plain space.
 * title line not cleared when new TOC loaded?
 * margin lines appearing in the middle of text?
+  * as designed, as far as the software shows: a recorded margin line (CODE + M) is stored as
+    B3H, ruler glyphs, 0DH, with no "hide" code, and the CPT gives it an ordinary screen row
+    (the status row, which it does hide, uses a switchable C3H link instead). Open: whether the
+    display hardware skipped B3H rows. See program-disk.md, "Unknowns in how documents show".
 * map more real keyboard keys
 ** Esc to SKIP: done
 ** delete to ERASE: done (ERASE is key 4FH; it blanks the character under the cursor and
    moves on, so "abcd" with the cursor on c becomes "ab d")
 ** insert to INSERT: waiting for INSERT's key number (not identified on the real system yet)
 ** others?
+* CODE+RETURN shows a `?`
+  * it's a coded return: CODE + RETURN's handler (B657H, block 2) ends the line with 8DH
+    before the usual 0DH (on a document's first line or a margin line it acts as a plain
+    RETURN). Its real glyph is unknown; it now shows as a faint arrow pointing left.

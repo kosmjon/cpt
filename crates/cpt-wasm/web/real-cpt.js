@@ -129,6 +129,7 @@ function cptGlyph(code) {
     case 0x87: return "^";
     case 0x89: return " "; // the tab character in text; its real glyph is unknown
     case 0x90: return "·"; // a coded space (CODE + SPACE); the page draws it as a faint dot
+    case 0x8d: return "←"; // a coded return (CODE + RETURN); the page draws a faint arrow
     case 0x8b: return "®";
     case 0x8c: return "©";
     default: return "?";
