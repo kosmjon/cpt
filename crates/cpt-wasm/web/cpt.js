@@ -311,7 +311,7 @@ function drawRulerMark(ctx, x, y, code, rev) {
   } else if (code === 0x83) {
     ctx.fillRect(x + 3, y + 3, 3, CELL_H - 4);
   } else {
-    ctx.fillRect(x + 3, y + 8, 4, 1); // the T's bar
+    ctx.fillRect(x + 2, y + 8, 6, 1); // the T's bar, centred over the stem
     ctx.fillRect(x + 4, y + 9, 2, CELL_H - 11); // its stem
   }
 }
