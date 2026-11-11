@@ -295,12 +295,12 @@ screen.
 | `00`–`AF` | 1 | a character-ROM glyph; `20`–`7E` ASCII | walker counts columns only below B0 (860AH) |
 | `A0` | 1 | required space | print path turns it into 20H (1A38H) |
 | `90` | 1 | **coded space** [CONFIRMED by typing: CODE + SPACE between `ab` and `cd` gives `61 62 90 63 64`]. Per the user: a space kept through justification (before or after words and lines) and one that keeps the words on either side together on a line; shown as a small faint dot. The browser draws it a little below mid-height, the inserted blank line's dot (80) at mid-height | a decoded printout shows it as a space |
-| `8D` | 1 | **coded return** [CONFIRMED by disassembly and by typing]: CODE + RETURN's handler (B657H, block 2) writes 8D and then ends the line, so the line ends `8D 0D`. On a document's first line (C0) or a margin line (B3) it writes no 8D and acts as a plain RETURN (B6FAH). **Its real glyph is unknown**: the emulator shows a faint arrow pointing left (the user's choice), one column wide | plain RETURN (code B6H) is editor index 07H; CODE + RETURN is index 26H (CAA2H) |
+| `8D` | 1 | **coded return** [CONFIRMED by disassembly and by typing]: CODE + RETURN's handler (B657H, block 2) writes 8D and then ends the line, so the line ends `8D 0D`. On a document's first line (C0) or a margin line (B3) it writes no 8D and acts as a plain RETURN (B6FAH). Per the user, it shows as a **black half diamond pointing left**, one column wide | plain RETURN (code B6H) is editor index 07H; CODE + RETURN is index 26H (CAA2H) |
 | `80`–`82` | 1 | ruler glyphs: column tick, every 5th, every 10th. Per the user, the every-5th mark (81) is a short vertical bar about twice a period's height (the browser draws it 2 × 4 px on the ticks' baseline). A lone `80` in a text row is double spacing's **system-inserted blank line** [CONFIRMED by typing: CODE + L, 2, then a line and RETURN gives `C2 80`]. The glyphs are not reverse by themselves: only ruler rows (the main ruler, a format line) are white on black, so the inserted line shows as a tiny faint dot on a white line (per the user) | ruler built at E4E0H |
 | `83` | 1 | ruler: a margin (left and right; one code for both). Per the user, both are a flat-topped vertical bar (the browser draws it 3 px wide) | **[CONFIRMED by typing]**: margin set (key 71H) adds one at the cursor |
 | `87` | 1 | ruler: the cursor's column, on the main ruler only. It takes the place of whatever mark is in that column (the left margin when the cursor is in column 1). Per the user, a wide vertical bar with a pointed top and a tail (the point's shape bitten out of its bottom); the browser draws it 7 px wide, with a 3-step point and a matching 3-step notch | **[CONFIRMED by typing]**: moves with the status row's column |
 | `84` | 1 | ruler: a tab stop. Per the user, a short, narrow T (the browser draws it so) | **[CONFIRMED by typing]**: tab set (key 75H) puts 84 at the cursor |
-| `89` | 1 | the **tab character in text** [CONFIRMED by disassembly]: the TAB key's insert (C891H–C8BDH, block 1) scans the format line for the next tab stop (84) or margin (83), fills with A0 and ends with 89 (with 84 instead when editing a format line). It never appears in a ruler or format line. **Its glyph is unknown**: the emulator shows a plain black-on-white space | treated as a tab/word break (8552H, 863DH); e.g. JP-M24's list items `3.` A0 89 `Your estimate…` |
+| `89` | 1 | the **tab character in text** [CONFIRMED by disassembly]: the TAB key's insert (C891H–C8BDH, block 1) scans the format line for the next tab stop (84) or margin (83), fills with A0 and ends with 89 (with 84 instead when editing a format line). It never appears in a ruler or format line. Per the user, it shows as a **black half diamond pointing right** at the end of the tab run | treated as a tab/word break (8552H, 863DH); e.g. JP-M24's list items `3.` A0 89 `Your estimate…` |
 | `0D` | – | end of row | every row, builder and messages |
 | `B0` | 0 | per-character attribute slot: **plain** (C4 in its place underlines). A row whose first character has a slot is **white on black** [HYPOTHESIS]: one slot per column in the status row, two in the title row. In document text slots appear only around underlined characters, and the row stays black on white | walker skips it; cursor toggles it; gives exactly the reversed rows the user remembers |
 | `B1` | 0 | end of screen | walker substitutes B1 for a link to 0000H |
@@ -322,7 +322,7 @@ screen.
   display list it is an ordinary row, `C0` followed by plain text, with no slot (B0) or other
   code that would make it white on black, so the emulator shows it black on white. What made
   it white on black on the real screen, if anything did, is unknown.
-- **The tab character's glyph (89H).** See the table: shown as a plain space.
+
 - **Whether recorded margin lines were hidden.** Nothing marks one to be hidden
   [CONFIRMED]:
   - On disk, a margin line is `B3`, ruler glyphs, `0D`, with no other code (all 13 on both
@@ -336,7 +336,7 @@ screen.
   open: whether the display hardware itself skipped a row starting with `B3`. That seems
   unlikely, because the CPT counts the margin line as one of its screen rows, so hiding it
   would leave a gap, but the hardware isn't documented.
-- **The coded return's glyph (8DH).** See the table: shown as a faint left arrow.
+
 
 **Reverse video and the status [user's memory, with a HYPOTHESIS for how it is coded].** The
 screen is black on white. The user remembers:

@@ -32,6 +32,11 @@
       }
       /* The page-white screen; the canvas paints into it. A slight inner glow + rounding reads
          as a CRT face. */
+      /* The screen takes the focus (Tab is the CPT's TAB there); a soft ring shows it has it. */
+      #screen:focus-visible {
+        outline: 2px solid rgba(210, 170, 90, 0.6);
+        outline-offset: 3px;
+      }
       #screen {
         display: block;
         border-radius: 6px;
@@ -366,7 +371,7 @@
       <div class="case">
         <div class="nameplate">CPT 8000</div>
         <div class="bezel">
-          <canvas id="screen"></canvas>
+          <canvas id="screen" tabindex="0" aria-label="CPT screen: type here; Tab is the CPT's TAB key while the screen has focus"></canvas>
         </div>
       </div>
 

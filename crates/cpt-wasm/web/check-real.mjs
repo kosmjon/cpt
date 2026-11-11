@@ -73,6 +73,7 @@ assert.equal(real.keyForPcCode("ArrowUp"), CPT_KEY.UP);
 assert.equal(real.keyForPcCode("Escape"), CPT_KEY.SKIP, "Esc is SKIP");
 assert.equal(real.keyForPcCode("Delete"), CPT_KEY.ERASE, "Delete is ERASE");
 assert.equal(real.keyForPcCode("Insert"), null, "Insert: INSERT's key isn't known yet");
+assert.equal(real.keyForPcCode("Tab"), CPT_KEY.TAB, "Tab is TAB (while the screen has focus)");
 assert.equal(real.drive(0).loaded, true);
 assert.equal(real.drive(1).loaded, false);
 

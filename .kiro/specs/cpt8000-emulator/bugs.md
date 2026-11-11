@@ -11,9 +11,9 @@
   * unknown: the display list has no white-on-black code on that row (it is `C0` and plain
     text), so it is left black on white. See program-disk.md, "Unknowns in how documents show".
 * white-on-black `>` before JP-M24's list items 3, 4 and 5
-  * fixed: that is 89H, the tab character in text (the TAB key fills with required spaces and
-    ends with 89H). It is not in the margin line, and its real glyph is unknown, so it now
-    shows as a plain space.
+  * fixed: that is 89H, the end of a tab run in text (the TAB key fills with required spaces
+    and ends with 89H). It is not in the margin line. It now shows black on white as a black
+    half diamond pointing right (per the user).
 * title line not cleared when new TOC loaded?
 * margin lines appearing in the middle of text?
   * as designed, as far as the software shows: a recorded margin line (CODE + M) is stored as
@@ -29,4 +29,4 @@
 * CODE+RETURN shows a `?`
   * it's a coded return: CODE + RETURN's handler (B657H, block 2) ends the line with 8DH
     before the usual 0DH (on a document's first line or a margin line it acts as a plain
-    RETURN). Its real glyph is unknown; it now shows as a faint arrow pointing left.
+    RETURN). It now shows as a black half diamond pointing left (per the user).

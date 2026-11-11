@@ -421,6 +421,23 @@ await sleep(60);
 await frames(1);
 await key("Escape", false);
 assert.ok(escKept, "Esc is taken by the page (preventDefault)");
+
+// Tab: the CPT's TAB while the screen has focus; on a button it is left to the browser.
+function tabDown() {
+  let kept = false;
+  for (const f of windowListeners.keydown || []) {
+    f({ code: "Tab", key: "Tab", repeat: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() { kept = true; } });
+  }
+  return kept;
+}
+document.activeElement = canvas;
+assert.ok(tabDown(), "Tab on the screen goes to the CPT");
+await key("Tab", false);
+document.activeElement = resetBtn;
+assert.ok(!tabDown(), "Tab on a button moves the focus as usual");
+await key("Tab", false);
+document.activeElement = undefined;
+console.log("Tab: the CPT's TAB on the screen, focus movement elsewhere");
 for (let i = 0; i < 80 && findRow(/\S/, 47, 54) !== undefined; i++) {
   await sleep(100);
   await frames(1);
@@ -434,7 +451,8 @@ await drives[0].sub[".drive-btn"].dispatch("click");
 await frames(2);
 assert.equal(drives[0].classList.contains("loaded"), false, "drive 1 is empty");
 assert.ok(status.textContent.startsWith("CPT system running"), `still running: ${status.textContent}`);
-assert.ok(rulerDrawn(), "with its screen");
+// (Only that the ruler is still there: a frame can catch the system redrawing it.)
+assert.ok(allDark(46) && rowText(46).includes("....|....") && frameMarks.size > 0, `with its screen: "${rowText(46)}"`);
 
 // RESET with drive 1 empty: the system stops and the screen goes black, waiting for a disk.
 await resetBtn.dispatch("click");

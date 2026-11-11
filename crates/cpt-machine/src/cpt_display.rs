@@ -17,17 +17,16 @@
 //!   (every 10th), `83` (a margin), `84` (a tab stop) and `87` (the cursor's column) (builder
 //!   at E4E0H; confirmed by typing). `89` is the **tab character in text**: the TAB key's
 //!   insert (C891H-C8BDH, block 1) fills to the next tab stop or margin with A0 and ends with
-//!   89 (84 in a format line). It never appears in a ruler or format line. Its real glyph is
-//!   unknown, so it shows as a plain space, black on white, one column wide.
+//!   89 (84 in a format line). It never appears in a ruler or format line. It shows as a black
+//!   half diamond pointing right (per the user), black on white, one column wide.
 //!   `90` is a **coded space** (CODE + SPACE) [CONFIRMED by typing]: a space kept through
 //!   justification, and one that keeps the words on either side together on a line. It shows
 //!   as a small faint dot (per the user; the browser draws the inserted blank line's dot at
 //!   mid-height and the coded space's a little lower).
 //!   `8D` is a **coded return** [CONFIRMED by disassembly and by typing]: CODE + RETURN's
 //!   handler (B657H, block 2) writes 8D and then ends the line, so the line ends `8D 0D`. On a
-//!   document's first line (C0) or a margin line (B3) it writes no 8D (a plain RETURN). Its
-//!   real glyph is unknown; it shows as a faint arrow pointing left (per the user), one
-//!   column wide.
+//!   document's first line (C0) or a margin line (B3) it writes no 8D (a plain RETURN). It
+//!   shows as a black half diamond pointing left (per the user), one column wide.
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
@@ -291,14 +290,14 @@ pub fn glyph(code: u8) -> char {
         0x8B => '®', // "CPT® WORD PROCESSING SOFTWARE" (start-up message)
         0x8C => '©', // "COPYRIGHT© 1983 BY CPT CORPORATION"
         // The tab character in text (the TAB key's insert at C8BBH, block 1, puts it where a
-        // tab ends). How the real screen drew it is unknown, so it shows as a plain space.
-        0x89 => ' ',
+        // tab run ends): a black half diamond pointing right (per the user).
+        0x89 => '▸',
         // A coded space (CODE + SPACE): a space that justification keeps as it is and that
         // keeps the words either side of it on one line. A small faint dot (per the user).
         0x90 => '·',
-        // A coded return (CODE + RETURN ends the line with 8D before the 0D): a faint arrow
-        // pointing left (per the user; the real glyph is unknown).
-        0x8D => '←',
+        // A coded return (CODE + RETURN ends the line with 8D before the 0D): a black half
+        // diamond pointing left (per the user).
+        0x8D => '◂',
         _ => '?',
     }
 }
@@ -560,10 +559,10 @@ mod tests {
     }
 
     #[test]
-    fn a_coded_return_is_a_left_arrow() {
+    fn a_coded_return_is_a_half_diamond_pointing_left() {
         let s = run(0x5000, &[0xC0, b'a', b'b', 0x0D, 0x8D, 0x0D, b'c', 0x8D, 0x0D, 0xB1], 0x5000);
-        assert_eq!(text(&s, 1), "←");
-        assert_eq!(text(&s, 2), "c←");
+        assert_eq!(text(&s, 1), "◂");
+        assert_eq!(text(&s, 2), "c◂");
         assert_eq!(rev(&s, 2), [false; 2]);
     }
 
@@ -576,11 +575,11 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_character_is_a_plain_space() {
-        // JP-M24's "3." A0 89 "Your": the tab keeps its column but shows as a black-on-white
-        // space; the ruler's own tab stop (84) stays white on black.
+    fn the_end_of_a_tab_run_is_a_half_diamond_pointing_right() {
+        // JP-M24's "3." A0 89 "Your": the tab's end keeps its column, black on white; the
+        // ruler's own tab stop (84) stays white on black.
         let s = run(0x5000, &[0xC0, b'3', b'.', 0xA0, 0x89, b'Y', 0x0D, 0xC0, 0x80, 0x84, 0x80, 0x0D, 0xB1], 0x5000);
-        assert_eq!(text(&s, 0), "3.  Y");
+        assert_eq!(text(&s, 0), "3. ▸Y");
         assert_eq!(rev(&s, 0), [false; 5]);
         assert_eq!(text(&s, 1), ".>.");
         assert!(s.row_is_reverse(1));

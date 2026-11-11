@@ -57,6 +57,8 @@ const CPT_KEY = {
   MAR_REL: 0x76,
   // CLEAR TAB SET: sets a tab stop at the cursor's column, or clears the one there.
   TAB_SET: 0x75,
+  // TAB: to the next tab stop (in text it fills with required spaces and ends with 89H).
+  TAB: 0x74,
 };
 
 // Special-key panel labels (as in cpt.js) -> CPT key number, for the keys identified so far.
@@ -99,6 +101,7 @@ const PC_NAMED_KEYS = {
   ArrowDown: CPT_KEY.DOWN,
   ArrowUp: CPT_KEY.UP,
   Escape: CPT_KEY.SKIP,
+  Tab: CPT_KEY.TAB, // only while the screen (or nothing) has focus; see cpt.js
   Delete: CPT_KEY.ERASE, // ERASE's key number is a hypothesis (see CPT_KEY.ERASE)
   // Insert: INSERT, once its key number is known (it isn't identified on the real system).
   Backslash: 0x15, // the CPT key with | and \
@@ -127,9 +130,9 @@ function cptGlyph(code) {
     case 0x83: return "M";
     case 0x84: return ">";
     case 0x87: return "^";
-    case 0x89: return " "; // the tab character in text; its real glyph is unknown
+    case 0x89: return "▸"; // the end of a tab run; the page draws a half diamond pointing right
     case 0x90: return "·"; // a coded space (CODE + SPACE); the page draws it as a faint dot
-    case 0x8d: return "←"; // a coded return (CODE + RETURN); the page draws a faint arrow
+    case 0x8d: return "◂"; // a coded return (CODE + RETURN); a half diamond pointing left
     case 0x8b: return "®";
     case 0x8c: return "©";
     default: return "?";

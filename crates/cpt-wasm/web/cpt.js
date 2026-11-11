@@ -213,14 +213,16 @@ function drawRealScreen(ctx, canvas, real) {
         // A coded space (CODE + SPACE): the same dot, a little below mid-height.
         ctx.fillStyle = rev ? PAGE : DOT;
         ctx.fillRect(c * CELL_W + 4, y + CELL_H / 2 + 2, 2, 2);
-      } else if (code === 0x8d) {
-        // A coded return (CODE + RETURN): a small faint arrow pointing left, at mid-height.
-        ctx.fillStyle = rev ? PAGE : DOT;
+      } else if (code === 0x89 || code === 0x8d) {
+        // Half diamonds (per the user), in ink: the end of a tab run (89H) points right, a
+        // coded return (CODE + RETURN, 8DH) points left. 7 rows tall, 4 px at the widest.
+        ctx.fillStyle = rev ? PAGE : INK;
         const x = c * CELL_W;
-        const m = y + CELL_H / 2;
-        ctx.fillRect(x + 2, m, 7, 1); // the shaft
-        ctx.fillRect(x + 3, m - 1, 1, 3); // the head
-        ctx.fillRect(x + 4, m - 2, 1, 5);
+        const top = y + 4;
+        for (let i = 0; i < 7; i++) {
+          const w = 4 - Math.abs(3 - i); // 1, 2, 3, 4, 3, 2, 1
+          ctx.fillRect(code === 0x89 ? x + 3 : x + 7 - w, top + i, w, 1);
+        }
       } else if (ch !== " ") {
         ctx.fillStyle = rev ? PAGE : INK;
         ctx.fillText(ch, c * CELL_W + 1, y + 1);
@@ -482,8 +484,17 @@ function setupKeyboard(ws) {
     releaseLatched();
   }
 
+  // Tab is the CPT's TAB key while the screen has focus (or nothing does); on a button it moves
+  // the focus as usual, so the page stays usable from the keyboard.
+  const screenEl = document.getElementById("screen");
+  function tabIsCpt() {
+    const a = document.activeElement;
+    return !a || a === screenEl || a === document.body || a === document.documentElement;
+  }
+
   function pcKey(e, down) {
     if (!real.running || e.ctrlKey || e.metaKey) return; // leave browser shortcuts alone
+    if (e.code === "Tab" && !held.has("Tab") && (down ? !tabIsCpt() : true)) return;
     const k = real.keyForPcCode(e.code);
     if (k === null) return;
     e.preventDefault();
@@ -499,6 +510,10 @@ function setupKeyboard(ws) {
   }
   window.addEventListener("keydown", (e) => pcKey(e, true));
   window.addEventListener("keyup", (e) => pcKey(e, false));
+  // Clicking the screen gives it the focus (so Tab is the CPT's).
+  if (screenEl && screenEl.addEventListener) {
+    screenEl.addEventListener("pointerdown", () => screenEl.focus && screenEl.focus());
+  }
   window.addEventListener("blur", releaseAll);
 
   return { press, release, latched, releaseLatched, releaseAll };
