@@ -258,8 +258,11 @@ assert.ok(status.textContent.startsWith("CPT system running"), status.textConten
   assert.ok(Math.abs(ms(secondOff - second) - 250) <= 10, "the 1000 Hz note lasts 250 ms");
 }
 await frames(1);
-// The ruler: the cursor's column mark (drawn as a shape, white) in column 1, then the ticks.
-const rulerDrawn = () => rowText(46).startsWith(" ...:....|....:....|") && frameMarks.get("46,0") === "#e8f0f0";
+// The ruler: the cursor's column mark in column 1 and the every-5th marks (columns 5, 15) are
+// drawn as white shapes; the other ticks are characters.
+const rulerDrawn = () =>
+  rowText(46).startsWith(" ... ....|.... ....|") &&
+  ["46,0", "46,4", "46,14"].every((cell) => frameMarks.get(cell) === "#e8f0f0");
 assert.ok(rulerDrawn(), `ruler drawn: "${rowText(46)}", column 1 mark ${frameMarks.get("46,0")}`);
 const allDark = (r) => [...Array(80).keys()].every((c) => frameDark.has(`${r},${c}`));
 assert.ok(allDark(46), "the ruler row is white on black");

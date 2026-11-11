@@ -200,7 +200,7 @@ function drawRealScreen(ctx, canvas, real) {
       }
       const code = s.codes[r * s.cols + c];
       const ch = cptGlyph(code);
-      if (code === 0x83 || code === 0x84 || code === 0x87) {
+      if (code === 0x81 || code === 0x83 || code === 0x84 || code === 0x87) {
         drawRulerMark(ctx, c * CELL_W, y, code, rev);
       } else if (code === 0x80 && !rev) {
         // A column tick outside a ruler: double spacing's system-inserted blank line, a tiny
@@ -240,18 +240,31 @@ function drawRealScreen(ctx, canvas, real) {
 }
 
 // The ruler's marks (per the user), in a CELL_W x CELL_H cell at (x, y):
-//   cursor's column (87H) - a wide (7 px) vertical bar with a pointed top
+//   cursor's column (87H) - a wide (7 px) vertical bar with a pointed top and a notched tail
+//   every 5th column (81H) - a short vertical bar, about twice a period's height
 //   margin (83H, left and right alike) - a narrower, flat-topped vertical bar
 //   tab stop (84H) - a short, narrow T in the lower half of the cell
 // Drawn in the row's light colour (the ruler is white on black).
 function drawRulerMark(ctx, x, y, code, rev) {
   ctx.fillStyle = rev ? PAGE : INK;
   if (code === 0x87) {
-    // A 7 px bar under a 3-step point (1, 3, 5 px), centred on x + 4.
+    // A 7 px bar (x + 1 .. x + 7) under a 3-step point (1, 3, 5 px), with the point's shape
+    // bitten out of its bottom (a tail): the last three rows lose their middle 1, 3, 5 px.
     ctx.fillRect(x + 4, y + 1, 1, 1);
     ctx.fillRect(x + 3, y + 2, 3, 1);
     ctx.fillRect(x + 2, y + 3, 5, 1);
-    ctx.fillRect(x + 1, y + 4, 7, CELL_H - 5);
+    ctx.fillRect(x + 1, y + 4, 7, CELL_H - 8);
+    const b = y + CELL_H - 4; // the first bitten row
+    ctx.fillRect(x + 1, b, 3, 1);
+    ctx.fillRect(x + 5, b, 3, 1);
+    ctx.fillRect(x + 1, b + 1, 2, 1);
+    ctx.fillRect(x + 6, b + 1, 2, 1);
+    ctx.fillRect(x + 1, b + 2, 1, 1);
+    ctx.fillRect(x + 7, b + 2, 1, 1);
+  } else if (code === 0x81) {
+    // Every fifth column: a short vertical bar, about twice a period's height, on the ticks'
+    // baseline.
+    ctx.fillRect(x + 4, y + 8, 2, 4);
   } else if (code === 0x83) {
     ctx.fillRect(x + 3, y + 3, 3, CELL_H - 4);
   } else {
