@@ -15,7 +15,7 @@ const INK = "#101418"; // its black
 const DOT = "#7a8486"; // the faint dot of a system-inserted blank line
 const GLASS_OFF = "#22272a"; // a powered-off tube
 // Shown while the power is on and nothing is running (no disk in drive 1).
-const INSERT_DISK_MESSAGE = "PLEASE INSERT A PROGRAM DISK";
+const INSERT_DISK_MESSAGE = "PLEASE INSERT PROGRAM DISK";
 
 async function main() {
   const resp = await fetch("cpt_wasm.wasm");

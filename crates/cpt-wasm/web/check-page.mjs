@@ -217,7 +217,7 @@ await frames(3);
 // Powered up, idle: a black screen, waiting for a program disk in drive 1 (no demo), with
 // "PLEASE INSERT A PROGRAM DISK" white on black in the middle: row 27 of 54, columns 27-54.
 function insertMessageShown() {
-  const msg = "PLEASE INSERT A PROGRAM DISK";
+  const msg = "PLEASE INSERT PROGRAM DISK";
   const col = Math.floor((80 - msg.length) / 2);
   return rowText(26) === " ".repeat(col) + msg && ctx.fillStyle === "#e8f0f0" && frameText.size === msg.replace(/ /g, "").length;
 }
