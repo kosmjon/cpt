@@ -202,6 +202,12 @@ function drawRealScreen(ctx, canvas, real) {
         ctx.fillStyle = rev ? PAGE : INK;
         ctx.fillText(ch, c * CELL_W + 1, y + 1);
       }
+      // Underlined: underlined text, or the cursor / a menu's selection, which blinks because
+      // the CPT itself turns the underline on and off.
+      if (a & 4) {
+        ctx.fillStyle = rev ? PAGE : INK;
+        ctx.fillRect(c * CELL_W, y + CELL_H - 2, CELL_W, 2);
+      }
     }
     if (last >= 0 && last < s.cols - 1 && s.attrs[r * s.cols + last] & 2) {
       ctx.fillStyle = INK;

@@ -20,9 +20,13 @@ cargo build -p cpt-wasm --target wasm32-unknown-unknown --release
 cp target/wasm32-unknown-unknown/release/cpt_wasm.wasm crates/cpt-wasm/web/
 
 # 3. Serve the web/ directory over HTTP (fetch() of .wasm needs a server, not file://)
-#    Any static server works, e.g.:
-npx serve crates/cpt-wasm/web
-#    or:  python -m http.server --directory crates/cpt-wasm/web 8080
+#    run-web.bat uses tools/serve_web.py, which sends Cache-Control: no-cache so a reload
+#    after a rebuild gets the new cpt.js and cpt_wasm.wasm:
+python tools/serve_web.py 8080 crates/cpt-wasm/web
+#    Any static server works, but one without that header can leave the browser running
+#    old copies until a hard reload (Ctrl+F5), e.g.:
+#    npx serve crates/cpt-wasm/web
+#    python -m http.server --directory crates/cpt-wasm/web 8080
 ```
 
 Open the served page and insert a CPT program disk image in drive 1 (see "The real CPT

@@ -486,6 +486,16 @@ fn tty_reception_to_disk_files_a_document() {
     assert!(bytes.windows(doc.len()).any(|w| w == doc), "RXTEST's text on the disk");
 }
 
+/// JP-M24's heading is underlined: a C4 before each character of `M E M O R A N D U M`. The
+/// row stays black on white (its B0 slots only follow the underlined part).
+#[test]
+fn underlined_text_shows_underlined() {
+    let Some(img) = tty_image() else { return };
+    let out = boot_with(&img, "100000000", &["--keys", "{3D}jp-m24{14}{ms 8000}", "--keys-at", "80000000"]);
+    let row = out.lines().filter(|l| l.contains("M E M O R A N D U M")).last().unwrap_or_else(|| panic!("{}", out));
+    assert!(row.ends_with("| underlined at 24-42"), "{}", row);
+}
+
 /// PRINT, RETURN prints the document on printer A (the daisy-wheel port at 42H/43H). The
 /// emulated printer is always ready and loads the next sheet when the CPT asks for one, so the
 /// two-page letter comes out whole. The characters are decoded through the print-wheel table

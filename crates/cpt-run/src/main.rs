@@ -739,6 +739,27 @@ fn print_screen(m: &mut cpt_machine::Machine, head: u16) {
                 .collect();
             format!(" white on black at {}", cols.join(","))
         };
+        // And the underlined columns (underlined text, or the cursor / menu selection).
+        let mut under: Vec<String> = Vec::new();
+        let row = &screen.rows[i];
+        let mut c = 0;
+        while c < row.len() {
+            if row[c].underline {
+                let start = c;
+                while c + 1 < row.len() && row[c + 1].underline {
+                    c += 1;
+                }
+                under.push(if start == c { format!("{}", c + 1) } else { format!("{}-{}", start + 1, c + 1) });
+            }
+            c += 1;
+        }
+        let tag = if ansi || under.is_empty() {
+            tag
+        } else if tag.is_empty() {
+            format!(" underlined at {}", under.join(","))
+        } else {
+            format!("{}, underlined at {}", tag, under.join(","))
+        };
         println!("{:>4} |{}|{}", i + 1, lines[i], tag);
         i += 1;
     }

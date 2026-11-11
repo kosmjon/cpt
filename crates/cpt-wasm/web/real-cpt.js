@@ -124,7 +124,7 @@ function cptGlyph(code) {
     case 0x83: return "M";
     case 0x84: return ">";
     case 0x87: return "^";
-    case 0x89: return ">";
+    case 0x89: return " "; // the tab character in text; its real glyph is unknown
     case 0x8b: return "®";
     case 0x8c: return "©";
     default: return "?";
@@ -223,7 +223,7 @@ class RealCpt {
   }
 
   // The decoded screen: { rows, cols, codes, attrs } (attrs bit 0 = a cell, bit 1 = white on
-  // black). The arrays are views into wasm memory, valid until the next call into wasm.
+  // black, bit 2 = underlined: underlined text, or the blinking cursor / menu selection). The arrays are views into wasm memory, valid until the next call into wasm.
   screen() {
     const rows = this.w.cpt_real_screen();
     const cols = this.w.cpt_real_cols();

@@ -432,7 +432,7 @@ pub extern "C" fn cpt_disk_active(station: u32) -> u32 {
 // The page runs the system faster than real time until it has settled
 // (`cpt_real_settled_cycles`), then in real time. The screen is decoded from the display list
 // (`cpt_machine::cpt_display`) into two buffers of REAL_ROWS x REAL_COLS bytes: character
-// codes, and attributes (bit 0 = a cell is there, bit 1 = white on black).
+// codes, and attributes (bit 0 = a cell is there, bit 1 = white on black, bit 2 = underlined).
 
 use cpt_machine::cpt_display::WINDOW_COLS as REAL_COLS;
 use cpt_machine::CptSystem;
@@ -695,7 +695,7 @@ pub extern "C" fn cpt_real_screen() -> usize {
                 for (ri, row) in screen.rows.iter().enumerate().take(REAL_ROWS) {
                     for (ci, cell) in row.iter().enumerate().take(REAL_COLS) {
                         c[ri * REAL_COLS + ci] = cell.code;
-                        a[ri * REAL_COLS + ci] = 1 | (cell.reverse as u8) << 1;
+                        a[ri * REAL_COLS + ci] = 1 | (cell.reverse as u8) << 1 | (cell.underline as u8) << 2;
                     }
                 }
             })

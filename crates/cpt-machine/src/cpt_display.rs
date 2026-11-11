@@ -15,14 +15,18 @@
 //!   (non-breaking) space (the printer path at 1A38H turns it into 20H); `80`-`8F` are special
 //!   glyphs from the character ROM: the ruler uses `80` (column tick), `81` (every 5th), `82`
 //!   (every 10th), `83` (a margin), `84` (a tab stop) and `87` (the cursor's column) (builder
-//!   at E4E0H; confirmed by typing). `89` is treated as a tab/word break by the word code at
-//!   863DH [HYPOTHESIS: a tab character in text].
+//!   at E4E0H; confirmed by typing). `89` is the **tab character in text**: the TAB key's
+//!   insert (C891H-C8BDH, block 1) fills to the next tab stop or margin with A0 and ends with
+//!   89 (84 in a format line). It never appears in a ruler or format line. Its real glyph is
+//!   unknown, so it shows as a plain space, black on white, one column wide.
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
-//! - `B0`: a per-character attribute slot. A row with slots (the title and status rows; text
-//!   rows have none) is white on black from edge to edge, including the few characters that
-//!   have no slot of their own. [HYPOTHESIS for how it is coded; the result is the user's.]
+//! - `B0`: a per-character attribute slot: plain (C4 in the same place underlines). A row
+//!   whose first character has a slot (the title and status rows) is white on black from edge
+//!   to edge, including the few characters that have no slot of their own. In document text
+//!   slots appear only around underlined characters, and the row stays black on white.
+//!   [HYPOTHESIS for how it is coded; the result is the user's.]
 //! - `80`-`8F` (the ruler glyphs) are drawn white on black by the character ROM itself
 //!   [HYPOTHESIS: the ruler has no slots but is reverse on the real screen].
 //! - `B1`: end of the screen (the walker at 8580H substitutes B1 for a link to 0000H).
@@ -46,8 +50,10 @@
 //!   row is the status row (column, line, unit). The screen shows its characters at the right
 //!   end of the title row, so the decoder merges it there instead of adding a row (per the
 //!   user; how the hardware does it is unknown).
-//! - `C4`: the cursor: the blink routine at 93C0H swaps a B0 slot with C4 and back. The next
-//!   character is shown inverted, so on a white-on-black row it is one black-on-white cell.
+//! - `C4`: **underline** the next character. A document's underlined text has a C4 before each
+//!   character (JP-M24's `M E M O R A N D U M`), and B0 before the plain ones. The cursor and a
+//!   menu's selection are the same attribute: the blink routine at 93C0H swaps a B0 slot with
+//!   C4 and back, so they show as a blinking underline (per the user).
 
 /// Columns in the visible window (the builder writes 80-column rows; BAC6H scrolls by 50H).
 pub const WINDOW_COLS: usize = 80;
@@ -64,6 +70,8 @@ pub struct Cell {
     pub code: u8,
     /// White on black (the screen's normal is black on white).
     pub reverse: bool,
+    /// Underlined (a C4 before it: underlined text, or the cursor / menu selection).
+    pub underline: bool,
 }
 
 /// Why the walk stopped.
@@ -90,12 +98,12 @@ pub struct CptScreen {
     pub status_merged: bool,
 }
 
-/// Finish a row: a row with attribute slots is white on black from edge to edge, apart from
-/// the cursor cell; other rows keep their per-cell colours (the ruler glyphs).
-fn finish_row(row: &mut [Cell], cursor_cells: &[bool], has_slots: bool) {
+/// Finish a row: a row with attribute slots is white on black from edge to edge; other rows
+/// keep their per-cell colours (the ruler glyphs).
+fn finish_row(row: &mut [Cell], has_slots: bool) {
     if has_slots {
-        for (cell, &cur) in row.iter_mut().zip(cursor_cells) {
-            cell.reverse = !cur;
+        for cell in row.iter_mut() {
+            cell.reverse = true;
         }
     }
 }
@@ -108,7 +116,7 @@ fn merge_status(title: &mut Vec<Cell>, status: &[Cell]) {
             continue;
         }
         while title.len() <= i {
-            title.push(Cell { code: 0x20, reverse: true });
+            title.push(Cell { code: 0x20, reverse: true, underline: false });
         }
         title[i] = *cell;
     }
@@ -118,12 +126,10 @@ fn merge_status(title: &mut Vec<Cell>, status: &[Cell]) {
 pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> CptScreen {
     let mut rows: Vec<Vec<Cell>> = Vec::new();
     let mut row: Vec<Cell> = Vec::new();
-    // Per cell of `row`: whether it is the cursor (shown opposite to its row).
-    let mut row_cursor: Vec<bool> = Vec::new();
     let mut col = 0usize; // logical column within the row, before scrolling
     let mut scroll = 0usize;
-    // Attributes for the next visible character, set by the slot codes before it.
-    let mut cursor = false;
+    // The next visible character is underlined (a C4 before it).
+    let mut underline = false;
     // Whether this row uses attribute slots (B0), i.e. is a white-on-black row.
     let mut row_has_slots = false;
     // The row being built is the optional status row (reached through a disarmed C3 jump).
@@ -145,8 +151,7 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
             match b {
                 0x0D => {
                     let mut done = std::mem::take(&mut row);
-                    finish_row(&mut done, &row_cursor, row_has_slots);
-                    row_cursor.clear();
+                    finish_row(&mut done, row_has_slots);
                     if status_row && !rows.is_empty() {
                         merge_status(&mut rows[0], &done);
                         status_merged = true;
@@ -161,15 +166,21 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     }
                     status_row = false;
                     col = 0;
-                    cursor = false;
+                    underline = false;
                     row_has_slots = false;
                     row_c0 = false;
                     if rows.len() >= max_rows {
                         break 'walk Ending::RowLimit;
                     }
                 }
-                0xB0 => row_has_slots = true,
-                0xC4 => cursor = true,
+                // A slot before the row's first character makes it a slotted (white-on-black)
+                // row: the title and status rows. Slots further in are underlined text's.
+                0xB0 => {
+                    if col == 0 {
+                        row_has_slots = true;
+                    }
+                }
+                0xC4 => underline = true,
                 0xC0 => row_c0 = true,
                 0xB1 => break 'walk Ending::EndMark(addr),
                 0xC1 => {
@@ -202,14 +213,14 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     }
                 }
                 _ => {
-                    // The ruler glyphs are white on black by themselves; a cursor cell in a
-                    // text row is too. (Slotted rows are settled when the row ends.)
-                    let rom_inverse = (0x80..=0x8F).contains(&b);
+                    // The ruler glyphs (80H-87H) are white on black by themselves; the text
+                    // codes after them (89H, the tab character) are not. (Slotted rows are
+                    // settled when the row ends.)
+                    let rom_inverse = (0x80..=0x87).contains(&b);
                     if col >= scroll && col < scroll + WINDOW_COLS {
-                        row.push(Cell { code: b, reverse: rom_inverse || cursor });
-                        row_cursor.push(cursor);
+                        row.push(Cell { code: b, reverse: rom_inverse, underline });
                     }
-                    cursor = false;
+                    underline = false;
                     col += 1;
                 }
             }
@@ -218,7 +229,7 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
         Ending::ByteLimit
     };
     if !row.is_empty() {
-        finish_row(&mut row, &row_cursor, row_has_slots);
+        finish_row(&mut row, row_has_slots);
         rows.push(row);
         kinds.push((false, false));
     }
@@ -233,7 +244,7 @@ fn black_out_filler_rows(rows: &mut [Vec<Cell>], kinds: &[(bool, bool)]) {
     let typing = kinds.iter().position(|k| k.1).and_then(|r| r.checked_sub(1));
     for (i, (row, &(filler, _))) in rows.iter_mut().zip(kinds).enumerate() {
         if filler && Some(i) != typing {
-            *row = vec![Cell { code: 0x20, reverse: true }; WINDOW_COLS];
+            *row = vec![Cell { code: 0x20, reverse: true, underline: false }; WINDOW_COLS];
         }
     }
 }
@@ -252,7 +263,9 @@ pub fn glyph(code: u8) -> char {
         0x87 => '^', // ruler: the cursor's column (moves as you type)
         0x8B => '®', // "CPT® WORD PROCESSING SOFTWARE" (start-up message)
         0x8C => '©', // "COPYRIGHT© 1983 BY CPT CORPORATION"
-        0x89 => '>', // [HYPOTHESIS] a tab in text
+        // The tab character in text (the TAB key's insert at C8BBH, block 1, puts it where a
+        // tab ends). How the real screen drew it is unknown, so it shows as a plain space.
+        0x89 => ' ',
         _ => '?',
     }
 }
@@ -275,13 +288,20 @@ impl CptScreen {
         const REVERSE: &str = "\x1b[37;40m";
         let mut s = String::new();
         for row in &self.rows {
-            let mut cur: Option<bool> = None;
+            let mut cur: Option<(bool, bool)> = None;
             for c in row {
-                if cur != Some(c.reverse) {
+                if cur != Some((c.reverse, c.underline)) {
+                    s.push_str("\x1b[0m");
                     s.push_str(if c.reverse { REVERSE } else { NORMAL });
-                    cur = Some(c.reverse);
+                    if c.underline {
+                        s.push_str("\x1b[4m");
+                    }
+                    cur = Some((c.reverse, c.underline));
                 }
                 s.push(glyph(c.code));
+            }
+            if cur.is_some_and(|(_, u)| u) {
+                s.push_str("\x1b[24m");
             }
             // Pad: a row's colour carries on to its right edge on the real screen.
             let pad_reverse = row.last().map(|c| c.reverse).unwrap_or(false);
@@ -465,18 +485,38 @@ mod tests {
         assert!(s.row_is_reverse(0));
     }
 
+    fn under(s: &CptScreen, r: usize) -> Vec<bool> {
+        s.rows[r].iter().map(|c| c.underline).collect()
+    }
+
     #[test]
-    fn the_cursor_is_one_inverted_cell() {
-        // The blink routine swaps a B0 slot for C4: on a white-on-black row the cursor
-        // character is black on white.
+    fn c4_underlines_the_next_character() {
+        // Underlined text in a document row: a C4 before each underlined character (JP-M24's
+        // "M E M O"), B0 before the plain ones; the colours don't change.
+        let s = run(0x5000, &[0xC0, b'x', 0xC4, b'M', 0xC4, b' ', 0xC4, b'E', 0xB0, b'y', 0x0D, 0xB1], 0x5000);
+        assert_eq!(text(&s, 0), "xM Ey");
+        assert_eq!(under(&s, 0), [false, true, true, true, false]);
+        assert_eq!(rev(&s, 0), [false; 5], "B0 slots inside a text row don't make it white on black");
+        // The cursor or a menu's selection: the blink routine swaps a B0 slot for C4, so on a
+        // white-on-black row it is an underline (blinking as the CPT swaps it back).
         let s = run(0x5000, &[0xC0, 0xB0, b'a', 0xC4, b'b', 0xB0, b'c', 0x0D, 0xB1], 0x5000);
-        assert_eq!(rev(&s, 0), [true, false, true]);
-        // In the title's double slots, one swapped slot makes the cursor too.
+        assert_eq!(rev(&s, 0), [true, true, true]);
+        assert_eq!(under(&s, 0), [false, true, false]);
+        // In the title's double slots, one swapped slot underlines the character too.
         let s = run(0x5000, &[0xC0, 0xB0, 0xB0, b'a', 0xC4, 0xB0, b'b', 0x0D, 0xB1], 0x5000);
-        assert_eq!(rev(&s, 0), [true, false]);
-        // In a text row (no slots) a cursor cell is white on black.
-        let s = run(0x5000, &[0xC0, b'a', 0xC4, b'b', 0x0D, 0xB1], 0x5000);
-        assert_eq!(rev(&s, 0), [false, true]);
+        assert_eq!(under(&s, 0), [false, true]);
+        assert!(s.row_is_reverse(0));
+    }
+
+    #[test]
+    fn the_tab_character_is_a_plain_space() {
+        // JP-M24's "3." A0 89 "Your": the tab keeps its column but shows as a black-on-white
+        // space; the ruler's own tab stop (84) stays white on black.
+        let s = run(0x5000, &[0xC0, b'3', b'.', 0xA0, 0x89, b'Y', 0x0D, 0xC0, 0x80, 0x84, 0x80, 0x0D, 0xB1], 0x5000);
+        assert_eq!(text(&s, 0), "3.  Y");
+        assert_eq!(rev(&s, 0), [false; 5]);
+        assert_eq!(text(&s, 1), ".>.");
+        assert!(s.row_is_reverse(1));
     }
 
     #[test]
@@ -485,6 +525,8 @@ mod tests {
         let a = s.to_ansi();
         assert!(a.contains("\x1b[37;40ma"), "reverse row: {:?}", a);
         assert!(a.contains("\x1b[30;47mb"), "normal row: {:?}", a);
+        let s = run(0x5000, &[0xC0, b'a', 0xC4, b'b', 0x0D, 0xB1], 0x5000);
+        assert!(s.to_ansi().contains("\x1b[30;47m\x1b[4mb\x1b[24m"), "underlined: {:?}", s.to_ansi());
     }
 
     #[test]

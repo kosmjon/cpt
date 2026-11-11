@@ -298,9 +298,9 @@ screen.
 | `83` | 1 | ruler: a margin (left and right) | **[CONFIRMED by typing]**: margin set (key 71H) adds one at the cursor |
 | `87` | 1 | ruler: the cursor's column | **[CONFIRMED by typing]**: moves with the status row's column |
 | `84` | 1 | ruler: a tab stop | **[CONFIRMED by typing]**: tab set (key 75H) puts 84 at the cursor |
-| `89` | 1 | [HYPOTHESIS] a tab character in text | treated as a tab/word break (8552H, 863DH) |
+| `89` | 1 | the **tab character in text** [CONFIRMED by disassembly]: the TAB key's insert (C891H–C8BDH, block 1) scans the format line for the next tab stop (84) or margin (83), fills with A0 and ends with 89 (with 84 instead when editing a format line). It never appears in a ruler or format line. **Its glyph is unknown**: the emulator shows a plain black-on-white space | treated as a tab/word break (8552H, 863DH); e.g. JP-M24's list items `3.` A0 89 `Your estimate…` |
 | `0D` | – | end of row | every row, builder and messages |
-| `B0` | 0 | per-character attribute slot: the next character is **white on black** [HYPOTHESIS]. One per column in the status row, two in the title row, none in text rows | walker skips it; cursor toggles it; gives exactly the reversed rows the user remembers |
+| `B0` | 0 | per-character attribute slot: **plain** (C4 in its place underlines). A row whose first character has a slot is **white on black** [HYPOTHESIS]: one slot per column in the status row, two in the title row. In document text slots appear only around underlined characters, and the row stays black on white | walker skips it; cursor toggles it; gives exactly the reversed rows the user remembers |
 | `B1` | 0 | end of screen | walker substitutes B1 for a link to 0000H |
 | `B2` | 0 | filler | walker skips it; pads the 16-byte cells below the status row |
 | `B3` | 0 | [HYPOTHESIS] start of a document's format line (its own ruler) | seen before RC-L1's format line |
@@ -310,8 +310,17 @@ screen.
 | `C1 xx` | 0 | horizontal scroll: first visible column = `NOT xx`, 80-column window | BAC6H steps it, writes the ruler's and text area's together |
 | `C2 lo hi` | 0 | jump to `hi lo` (0000H ends the screen) | walker, builder |
 | `C3 a a b b` | 0 | disarmed jump: continue at `b b` (the byte after) | E6BAH flips C2↔C3 to hide/show an optional status row |
-| `C4` | 0 | the cursor: the next character is the opposite of its row (black on white in a white-on-black row) | blink at 93C0H swaps a slot B0↔C4 every 25 ticks |
+| `C4` | 0 | **underline** the next character [CONFIRMED]: JP-M24 (cpt2489) has a C4 before each character of its underlined heading `M E M O R A N D U M`. The cursor and a menu's selection are the same attribute, so they are a **blinking underline** (per the user) | blink at 93C0H swaps a slot B0↔C4 every 25 ticks |
 | `C5`–`CF` | 0 | unknown; C6, C7, CA are built by the line copier at 8820H (block 1) | not yet traced |
+
+**Unknowns in how documents show** (left as they are until more is known):
+- **A document's title line.** Its first line (JP-M24's `Memo - Phillips to Bell re Test
+  Cell Project  7/10/87`) is its title: the patch-page reader skips it, and it comes just
+  before the document's format line. The user remembers it as white on black. But in the
+  display list it is an ordinary row, `C0` followed by plain text, with no slot (B0) or other
+  code that would make it white on black, so the emulator shows it black on white. What made
+  it white on black on the real screen, if anything did, is unknown.
+- **The tab character's glyph (89H).** See the table: shown as a plain space.
 
 **Reverse video and the status [user's memory, with a HYPOTHESIS for how it is coded].** The
 screen is black on white. The user remembers:

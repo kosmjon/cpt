@@ -305,7 +305,7 @@ Items throughout the specs are tagged `[CONFIRMED]`, `[ASSUMED]`, `[HYPOTHESIS]`
   real system").
   - The open work is the unidentified keys, the rest of TTY, the SRS link and the
     character ROM.
-  - `cargo test --workspace` runs 363 tests with no warnings. The real-disk boot tests skip
+  - `cargo test --workspace` runs 365 tests with no warnings. The real-disk boot tests skip
     themselves unless `setup-disks.bat` has made `disk/cpt.img` and `disk/cpt2489.img`.
   - The browser has Node checks in `crates/cpt-wasm/web/check*.mjs`.
 - **The assembler** front end and code generation are working and tested for the confirmed

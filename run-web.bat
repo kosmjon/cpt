@@ -27,5 +27,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Serving crates\cpt-wasm\web at http://localhost:8080  (Ctrl+C to stop)
-python -m http.server --directory crates\cpt-wasm\web 8080
+rem The server sends Cache-Control: no-cache, so after a rebuild a plain reload gets the new
+rem cpt.js and cpt_wasm.wasm instead of the browser's old copies.
+python tools\serve_web.py 8080 crates\cpt-wasm\web
