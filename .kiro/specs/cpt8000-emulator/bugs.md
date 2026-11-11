@@ -1,4 +1,7 @@
 * line spacing > 1 reveals white-on-black dot lines.
+  * fixed: the inserted blank line is a lone 80H (the ruler's column tick) in a text row. Only
+    ruler rows are white on black now, and the browser draws that 80H as a tiny faint dot on
+    a white line.
 * certain other pages reveal black areas and unrecognized glyphs.
 * special code for underscore not working on screen or print
   * screen: fixed. C4H before a character underlines it (JP-M24's M E M O R A N D U M); the
@@ -14,7 +17,8 @@
 * title line not cleared when new TOC loaded?
 * margin lines appearing in the middle of text?
 * map more real keyboard keys
-** Esc to SKIP
-** delete to ERASE
-** insert to INSERT
+** Esc to SKIP: done
+** delete to ERASE: done (ERASE is key 4FH; it blanks the character under the cursor and
+   moves on, so "abcd" with the cursor on c becomes "ab d")
+** insert to INSERT: waiting for INSERT's key number (not identified on the real system yet)
 ** others?

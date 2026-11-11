@@ -102,6 +102,9 @@ did; the CPT software tracks its own SHIFT, LOCK and CODE.
 | Enter | RETURN |
 | Backspace | backspace |
 | ↓ / ↑ | CPT DOWN / UP (by the selected unit, or a line) |
+| Esc | SKIP |
+| Delete | ERASE (blanks the character under the cursor and moves on) |
+| Insert | nothing yet: the CPT's INSERT key isn't identified |
 | `\` | the CPT's `|` / `\` key |
 | numeric keypad 0–9 `.` `-` | the CPT keypad |
 

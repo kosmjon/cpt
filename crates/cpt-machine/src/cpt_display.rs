@@ -19,6 +19,10 @@
 //!   insert (C891H-C8BDH, block 1) fills to the next tab stop or margin with A0 and ends with
 //!   89 (84 in a format line). It never appears in a ruler or format line. Its real glyph is
 //!   unknown, so it shows as a plain space, black on white, one column wide.
+//!   `90` is a **coded space** (CODE + SPACE) [CONFIRMED by typing]: a space kept through
+//!   justification, and one that keeps the words on either side together on a line. It shows
+//!   as a small faint dot (per the user; the browser draws the inserted blank line's dot at
+//!   mid-height and the coded space's a little lower).
 //! - `0D`: end of row.
 //! - `B0`-`FF`: zero width (the software's own walker at 8580H/860AH never counts them as a
 //!   column), except the structure codes below.
@@ -27,8 +31,11 @@
 //!   to edge, including the few characters that have no slot of their own. In document text
 //!   slots appear only around underlined characters, and the row stays black on white.
 //!   [HYPOTHESIS for how it is coded; the result is the user's.]
-//! - `80`-`8F` (the ruler glyphs) are drawn white on black by the character ROM itself
-//!   [HYPOTHESIS: the ruler has no slots but is reverse on the real screen].
+//! - Ruler rows are white on black: the main ruler (a C0 row of ruler glyphs 80-87) and a
+//!   document's format line (a row with B3) [HYPOTHESIS: the ruler has no slots but is
+//!   reverse on the real screen]. The glyphs themselves are not reverse: double spacing's
+//!   **system-inserted blank line** is a lone `80` (the column tick) in a text row (`C2 80`),
+//!   shown as a tiny, faint dot on a white line (per the user).
 //! - `B1`: end of the screen (the walker at 8580H substitutes B1 for a link to 0000H).
 //! - `B2`: filler (skipped like B0 by 8580H; pads the 16-byte cells below the status row).
 //! - `B3`: starts a document's format line (its own ruler, drawn with the ruler glyphs)
@@ -108,6 +115,19 @@ fn finish_row(row: &mut [Cell], has_slots: bool) {
     }
 }
 
+/// The ruler glyphs (column ticks, margins, tab stops, the cursor's column).
+fn is_ruler_glyph(code: u8) -> bool {
+    (0x80..=0x87).contains(&code)
+}
+
+/// A row drawn white on black as a ruler: a document's format line (it has a B3), or the main
+/// ruler (a C0 row of nothing but ruler glyphs, at least two). A ruler glyph anywhere else is
+/// black on white: double spacing's system-inserted blank line is a single 80 (the column
+/// tick) in a text row, which the CPT shows as a tiny dot on a white line (per the user).
+fn is_ruler_row(row: &[Cell], c0: bool, b3: bool) -> bool {
+    b3 || (c0 && row.len() >= 2 && row.iter().all(|c| is_ruler_glyph(c.code)))
+}
+
 /// Merge the status row into the title row: its characters (not its blanks) replace the
 /// title's at the same columns, so the column, line and unit show at the title's right end.
 fn merge_status(title: &mut Vec<Cell>, status: &[Cell]) {
@@ -138,6 +158,8 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
     // The row being built has a C0 (rows the system builds have one; document lines after
     // their first do not).
     let mut row_c0 = false;
+    // The row being built is a document's format line (it has a B3).
+    let mut row_b3 = false;
     // Per finished row: (a bare C0 filler row, the main ruler: C0 then only ruler glyphs).
     let mut kinds: Vec<(bool, bool)> = Vec::new();
     let mut unknown: Vec<u8> = Vec::new();
@@ -151,16 +173,15 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
             match b {
                 0x0D => {
                     let mut done = std::mem::take(&mut row);
-                    finish_row(&mut done, row_has_slots);
+                    let is_ruler = is_ruler_row(&done, row_c0, row_b3);
+                    finish_row(&mut done, row_has_slots || is_ruler);
                     if status_row && !rows.is_empty() {
                         merge_status(&mut rows[0], &done);
                         status_merged = true;
                     } else {
                         // A bare `C0 0D`: a filler row, with no document text.
                         let filler = row_c0 && done.is_empty() && !row_has_slots;
-                        let ruler = row_c0
-                            && !done.is_empty()
-                            && done.iter().all(|c| (0x80..=0x8F).contains(&c.code));
+                        let ruler = is_ruler && row_c0;
                         kinds.push((filler, ruler));
                         rows.push(done);
                     }
@@ -169,6 +190,7 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     underline = false;
                     row_has_slots = false;
                     row_c0 = false;
+                    row_b3 = false;
                     if rows.len() >= max_rows {
                         break 'walk Ending::RowLimit;
                     }
@@ -182,6 +204,7 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                 }
                 0xC4 => underline = true,
                 0xC0 => row_c0 = true,
+                0xB3 => row_b3 = true,
                 0xB1 => break 'walk Ending::EndMark(addr),
                 0xC1 => {
                     scroll = (!read(next)) as usize;
@@ -213,12 +236,10 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     }
                 }
                 _ => {
-                    // The ruler glyphs (80H-87H) are white on black by themselves; the text
-                    // codes after them (89H, the tab character) are not. (Slotted rows are
-                    // settled when the row ends.)
-                    let rom_inverse = (0x80..=0x87).contains(&b);
+                    // Colours are settled when the row ends: white on black for slotted rows
+                    // and ruler rows, black on white for everything else.
                     if col >= scroll && col < scroll + WINDOW_COLS {
-                        row.push(Cell { code: b, reverse: rom_inverse, underline });
+                        row.push(Cell { code: b, reverse: false, underline });
                     }
                     underline = false;
                     col += 1;
@@ -229,7 +250,8 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
         Ending::ByteLimit
     };
     if !row.is_empty() {
-        finish_row(&mut row, row_has_slots);
+        let is_ruler = is_ruler_row(&row, row_c0, row_b3);
+        finish_row(&mut row, row_has_slots || is_ruler);
         rows.push(row);
         kinds.push((false, false));
     }
@@ -266,6 +288,9 @@ pub fn glyph(code: u8) -> char {
         // The tab character in text (the TAB key's insert at C8BBH, block 1, puts it where a
         // tab ends). How the real screen drew it is unknown, so it shows as a plain space.
         0x89 => ' ',
+        // A coded space (CODE + SPACE): a space that justification keeps as it is and that
+        // keeps the words either side of it on one line. A small faint dot (per the user).
+        0x90 => '·',
         _ => '?',
     }
 }
@@ -506,6 +531,32 @@ mod tests {
         let s = run(0x5000, &[0xC0, 0xB0, 0xB0, b'a', 0xC4, 0xB0, b'b', 0x0D, 0xB1], 0x5000);
         assert_eq!(under(&s, 0), [false, true]);
         assert!(s.row_is_reverse(0));
+    }
+
+    #[test]
+    fn a_system_inserted_blank_line_is_black_on_white() {
+        // Double spacing: text, the inserted blank line (a lone 80 after a jump), text, then
+        // a format line (B3) and the main ruler, which stay white on black.
+        let s = run(0x5000, &[
+            0xC0, b's', b'd', 0x0D,
+            0x80, 0x0D,
+            b's', b'd', 0x0D,
+            0xB3, 0x83, 0x80, 0x84, 0x83, 0x0D,
+            0xC0, 0x87, 0x80, 0x81, 0x83, 0x0D, 0xB1,
+        ], 0x5000);
+        assert_eq!(text(&s, 1), ".");
+        assert_eq!(rev(&s, 1), [false], "the inserted line's dot is on a white line");
+        assert!(!s.row_is_reverse(0) && !s.row_is_reverse(2));
+        assert!(s.row_is_reverse(3), "the format line");
+        assert!(s.row_is_reverse(4), "the main ruler");
+    }
+
+    #[test]
+    fn a_coded_space_is_a_dot_one_column_wide() {
+        let s = run(0x5000, &[0xC0, b'a', b'b', 0x90, b'c', b'd', 0x0D, 0xB1], 0x5000);
+        assert_eq!(text(&s, 0), "ab·cd");
+        assert_eq!(rev(&s, 0), [false; 5]);
+        assert!(s.unknown_codes.is_empty());
     }
 
     #[test]

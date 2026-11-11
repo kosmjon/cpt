@@ -70,6 +70,9 @@ assert.ok(rows[45].startsWith("T.017-5  REV (G-1-1)    USA LEGAL"), rows[45]);
 assert.ok(rows[47].startsWith("1   20  22  23"), rows[47]);
 assert.equal(real.keyForPcCode("ArrowDown"), CPT_KEY.DOWN);
 assert.equal(real.keyForPcCode("ArrowUp"), CPT_KEY.UP);
+assert.equal(real.keyForPcCode("Escape"), CPT_KEY.SKIP, "Esc is SKIP");
+assert.equal(real.keyForPcCode("Delete"), CPT_KEY.ERASE, "Delete is ERASE");
+assert.equal(real.keyForPcCode("Insert"), null, "Insert: INSERT's key isn't known yet");
 assert.equal(real.drive(0).loaded, true);
 assert.equal(real.drive(1).loaded, false);
 

@@ -265,11 +265,12 @@ impl PrintWheel {
 }
 
 /// How a CPT character code prints in plain text: ASCII as itself, the required space (A0H)
-/// as a space, anything else (the wheel's special characters) as `?`.
+/// and the coded space (90H) as spaces, anything else (the wheel's special characters) as `?`.
 fn text_char(code: u8) -> char {
     match code {
         0x20..=0x7E => code as char,
-        0xA0 => ' ',
+        // The required space and the coded space print as spaces.
+        0xA0 | 0x90 => ' ',
         _ => '?',
     }
 }

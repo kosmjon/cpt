@@ -12,6 +12,7 @@ const CELL_H = 16;
 
 const PAGE = "#e8f0f0"; // the screen's white (slight cyan tint)
 const INK = "#101418"; // its black
+const DOT = "#7a8486"; // the faint dot of a system-inserted blank line
 const GLASS_OFF = "#22272a"; // a powered-off tube
 
 async function main() {
@@ -48,7 +49,7 @@ async function main() {
       ws.speaker.onFrame(ws.powered);
       drawRealScreen(ctx, canvas, real);
       statusEl.textContent = real.settled
-        ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN)"
+        ? "CPT system running — type on your keyboard (Alt = CODE, ↑ ↓ = CPT UP / DOWN, Esc = SKIP, Delete = ERASE)"
         : `starting the CPT system… ${Math.round(real.startProgress * 100)}%`;
     } else {
       // Powered and idle: a black screen, waiting for a program disk in drive 1.
@@ -197,8 +198,20 @@ function drawRealScreen(ctx, canvas, real) {
         ctx.fillStyle = INK;
         ctx.fillRect(c * CELL_W, y, CELL_W, CELL_H);
       }
-      const ch = cptGlyph(s.codes[r * s.cols + c]);
-      if (ch !== " ") {
+      const code = s.codes[r * s.cols + c];
+      const ch = cptGlyph(code);
+      if (code === 0x80 && !rev) {
+        // A column tick outside a ruler: double spacing's system-inserted blank line, a tiny
+        // faint dot (smaller and fainter than a period).
+        // At mid-height.
+        // 2 x 2 px in a light grey: lighter than a period, which is drawn in ink.
+        ctx.fillStyle = DOT;
+        ctx.fillRect(c * CELL_W + 4, y + CELL_H / 2 - 1, 2, 2);
+      } else if (code === 0x90) {
+        // A coded space (CODE + SPACE): the same dot, a little below mid-height.
+        ctx.fillStyle = rev ? PAGE : DOT;
+        ctx.fillRect(c * CELL_W + 4, y + CELL_H / 2 + 2, 2, 2);
+      } else if (ch !== " ") {
         ctx.fillStyle = rev ? PAGE : INK;
         ctx.fillText(ch, c * CELL_W + 1, y + 1);
       }

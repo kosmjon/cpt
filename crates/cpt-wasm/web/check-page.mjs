@@ -400,17 +400,24 @@ for (let r = 1; r < 45; r++) assert.ok(allDark(r), `upper screen row ${r + 1} is
 assert.ok(!frameDark.has("45,0"), "the typing line stays black on white");
 console.log(`PAGE, DOWN: TOC at row ${tocRow + 1}; canvas ${canvas.height / CELL_H} rows`);
 
-// SKIP on the panel (PAGE still selected): the lower screen's text goes to the bit bucket,
-// leaving an empty white lower screen.
+// SKIP (PAGE still selected), from the PC's Esc key: the lower screen's text goes to the bit
+// bucket, leaving an empty white lower screen. The page keeps Esc from the browser.
 assert.ok(panelKey("SKIP"), "the SKIP key is on the panel");
-await panelKey("SKIP").dispatch("click");
+let escKept = false;
+for (const f of windowListeners.keydown || []) {
+  f({ code: "Escape", key: "Escape", repeat: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() { escKept = true; } });
+}
+await sleep(60);
+await frames(1);
+await key("Escape", false);
+assert.ok(escKept, "Esc is taken by the page (preventDefault)");
 for (let i = 0; i < 80 && findRow(/\S/, 47, 54) !== undefined; i++) {
   await sleep(100);
   await frames(1);
 }
 assert.equal(findRow(/\S/, 47, 54), undefined, "PAGE, SKIP: no text below the ruler");
 for (let r = 47; r < 54; r++) assert.ok(!frameDark.has(`${r},0`), `row ${r + 1} below the ruler is white`);
-console.log("PAGE, SKIP: the lower screen is empty and white");
+console.log("PAGE, Esc (SKIP): the lower screen is empty and white");
 
 // Take the program disk out of drive 1: the system keeps running.
 await drives[0].sub[".drive-btn"].dispatch("click");

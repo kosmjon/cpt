@@ -294,7 +294,8 @@ screen.
 |---|---|---|---|
 | `00`–`AF` | 1 | a character-ROM glyph; `20`–`7E` ASCII | walker counts columns only below B0 (860AH) |
 | `A0` | 1 | required space | print path turns it into 20H (1A38H) |
-| `80`–`82` | 1 | ruler glyphs: column tick, every 5th, every 10th | ruler built at E4E0H |
+| `90` | 1 | **coded space** [CONFIRMED by typing: CODE + SPACE between `ab` and `cd` gives `61 62 90 63 64`]. Per the user: a space kept through justification (before or after words and lines) and one that keeps the words on either side together on a line; shown as a small faint dot. The browser draws it a little below mid-height, the inserted blank line's dot (80) at mid-height | a decoded printout shows it as a space |
+| `80`–`82` | 1 | ruler glyphs: column tick, every 5th, every 10th. A lone `80` in a text row is double spacing's **system-inserted blank line** [CONFIRMED by typing: CODE + L, 2, then a line and RETURN gives `C2 80`]. The glyphs are not reverse by themselves: only ruler rows (the main ruler, a format line) are white on black, so the inserted line shows as a tiny faint dot on a white line (per the user) | ruler built at E4E0H |
 | `83` | 1 | ruler: a margin (left and right) | **[CONFIRMED by typing]**: margin set (key 71H) adds one at the cursor |
 | `87` | 1 | ruler: the cursor's column | **[CONFIRMED by typing]**: moves with the status row's column |
 | `84` | 1 | ruler: a tab stop | **[CONFIRMED by typing]**: tab set (key 75H) puts 84 at the cursor |

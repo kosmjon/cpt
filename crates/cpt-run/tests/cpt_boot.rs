@@ -486,6 +486,14 @@ fn tty_reception_to_disk_files_a_document() {
     assert!(bytes.windows(doc.len()).any(|w| w == doc), "RXTEST's text on the disk");
 }
 
+/// CODE + SPACE types a coded space (90H): one column, shown as a small dot.
+#[test]
+fn code_space_types_a_coded_space() {
+    let Some(img) = image() else { return };
+    let out = boot_with(&img, "86000000", &["--keys", "ab{+77}{10}{-77}cd{ms 1500}", "--keys-at", "80000000"]);
+    assert!(last_row(&out, "  46 |").starts_with("  46 |ab·cd "), "{}", last_row(&out, "  46 |"));
+}
+
 /// JP-M24's heading is underlined: a C4 before each character of `M E M O R A N D U M`. The
 /// row stays black on white (its B0 slots only follow the underlined part).
 #[test]

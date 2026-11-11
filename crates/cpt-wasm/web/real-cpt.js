@@ -98,6 +98,9 @@ const PC_NAMED_KEYS = {
   AltRight: CPT_KEY.CODE,
   ArrowDown: CPT_KEY.DOWN,
   ArrowUp: CPT_KEY.UP,
+  Escape: CPT_KEY.SKIP,
+  Delete: CPT_KEY.ERASE, // ERASE's key number is a hypothesis (see CPT_KEY.ERASE)
+  // Insert: INSERT, once its key number is known (it isn't identified on the real system).
   Backslash: 0x15, // the CPT key with | and \
   // The CPT keypad (keys found by the key sweep).
   Numpad0: 0x18, Numpad1: 0x49, Numpad2: 0x19, Numpad3: 0x59, Numpad4: 0x4a,
@@ -125,6 +128,7 @@ function cptGlyph(code) {
     case 0x84: return ">";
     case 0x87: return "^";
     case 0x89: return " "; // the tab character in text; its real glyph is unknown
+    case 0x90: return "·"; // a coded space (CODE + SPACE); the page draws it as a faint dot
     case 0x8b: return "®";
     case 0x8c: return "©";
     default: return "?";
