@@ -120,6 +120,12 @@ ADJ, PROG, ERASE, and the staple key.
   upper screen; then PAGE, DOWN scrolls it all into the lower screen.
 - **SKIP** discards text after the cursor by the selected unit. PAGE then SKIP empties the
   lower screen.
+- **CODE + MAR REL + a letter** (the Outliner on cpt.img: O turns it on or off, Q numbers
+  again from the first label). The CPT needs MAR REL still held when the letter is pressed.
+  Latch CODE on the panel (or hold Alt), **hold the mouse button down on MAR REL**, and press
+  the letter on the PC keyboard. A plain click on MAR REL releases it (and the latched CODE)
+  before the letter arrives, so the letter is just typed. See `program-disk.md`, "The
+  Outliner".
 - **CLEAR TAB SET** puts a tab stop at the cursor's column, or clears the one there.
 - **MAR REL** is the margin release.
 - **PROG** is the keyboard program. Latch CODE and press PROG to start recording keys ("PROG"

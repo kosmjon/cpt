@@ -680,6 +680,83 @@ The page ends "THE OPERATION HAS BEEN WRITTEN TO THE PROGRAM DISK."
 - Whether the operation's features are read from the `OP` page or built into the sectors
   that operation loads.
 
+## The Outliner **[CONFIRMED by disassembly and by running cpt.img]**
+
+The Outliner numbers outline and paragraph labels. It's on **cpt.img only**: that disk's OP
+documents list it for operations 0 and 1 (operation 1's header: "SPELLING VERIFIER,
+BACKGROUND SEARCH, & OUTLINER ADDED", 3/28/84). cpt2489 has its prompt text but no code, and
+its OP document doesn't list it.
+
+**The code** is **segment 37H (55)**, 9 functions in block 1 (E445H–EA18H on cpt.img):
+
+| Function | Address | What it does |
+|---|---|---|
+| 37.00 | E448H | turn on: ask the labeling format (prompt 02C6H) |
+| 37.01 | E490H | turn off |
+| 37.02 | E704H | insert a label (CODE + Q) |
+| 37.03 | E7E6H | end the pending label (the editor calls it on the next other key) |
+| 37.04 | E809H | called by the editor's line handling (D555H) for a DFH code; not traced |
+| 37.07 | E5BAH | insert a label, numbering again from the first (CODE + MAR REL + Q) |
+| 37.08 | E445H | "available": returns 1 |
+
+37.05 (EA18H) wasn't traced, and 37.06 is empty.
+
+**Using it:**
+1. **Turn it on or off: hold CODE and MAR REL (key 76H) together, then press O.** (Releasing
+   MAR REL before the O loses the layer: the O is typed.) This is the third key layer (DC84H,
+   O = index 72H, handler CC82H). It toggles flag 2550H and shows **`CODE: O`** on the title
+   line while it's on. Turning it on asks **`SELECT LABELING FORMAT  Outline Paragraph 1
+   Paragraph 2`**; SPACE moves and RETURN picks.
+2. **Insert a label: CODE + Q** at the start of a line (index 53H, CBFAH, works only while
+   it's on). **Press it again straight away to step the same label down a level**: once is
+   level 1, twice level 2, and so on to 7, then back to 1. The label stays "pending" (flag
+   2551H) while the next command is another CODE + Q or CODE + MAR REL + Q. Any other key
+   ends it (C7A5H calls 37.03), and the next CODE + Q starts again at level 1.
+3. **Start the numbering again: CODE + MAR REL + Q** (index 74H, CCAFH). It inserts a level-1
+   label numbered from the first (`I.` in the Outline format), whatever came before.
+
+Each level keeps its own count: `I.`, `A.`, `1.`, `2.`, then a level-2 label gave `B.`
+[whether a deeper level starts again under a new higher one isn't tested]. Each label ends
+with a tab mark (89H) before the text, and the labels come with blank lines around them.
+
+**What the formats give** [CONFIRMED by typing, levels 1–4]:
+
+| Format | Level 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| Outline | `I.` | `A.` | `1.` | |
+| Paragraph 1 | `1.` | `a.` | `(1)` | `a.` |
+| Paragraph 2 | `1` | `1.1` | `1.1.1` | `1.1.1.1` |
+
+Outline and Paragraph 1 labels move one column right per level (with no tab stops on the
+ruler) and line up on their period; Paragraph 2 labels are flush left.
+
+**How they're built.** Each format has two tables, one entry per level:
+- **A numbering style** (7 bytes; E6E8H, E6EFH, E6FDH; 37.00 copies the chosen one):
+
+  | Format | Levels 1–7 |
+  |---|---|
+  | Outline | `01 02 03 05 03 05 04` |
+  | Paragraph 1 | `03 05 03 15 13 15 13` |
+  | Paragraph 2 | `06` × 7 |
+
+  Seen so far: 01 upper-case Roman, 02 upper-case letter, 03 arabic, 05 lower-case letter,
+  06 legal (each level's number joined by `.`). 04 is probably lower-case Roman, and 10H on
+  13H/15H shows the same as 03/05 at levels 3–4 [HYPOTHESIS for what 10H adds].
+- **A picture** per level (pointer tables at E5F2H, E641H and E691H). Each picture is `{`, a
+  tab mark (89H) per level below the first, the label pattern with `@` for the number (`@.`,
+  `@)` or `(@)`), a tab mark, and 17H to end. So deeper levels sit one tab further in. For
+  example Outline level 1 is `{@.▸`, level 5 is `{▸▸▸▸(@)▸`, and Paragraph 2's pictures have
+  no tabs. What `{` does is not traced [HYPOTHESIS: aligns the label on its period].
+
+**State.** HL (from 254EH) points to the Outliner's state, read and written through E4FEH (C
+selects the field, A the operation: 0 clear, 1 add one, 2 read into D, else store D). Field
+1 is the current level, field 3 a count per level. The single-byte system flags 18H and 19H
+(through 0070H and 008EH) decide whether CODE + Q steps down a level, and whether a label
+just ended.
+
+Not traced: 37.04 (the editor's DFH case), 37.05, the 10H style bit, and what Outline levels
+5–7 look like (from the tables: `a)`, `(1)`, `(a)`, then `i)`).
+
 ## Disk utilities (DU30?) **[the messages CONFIRMED; the utilities' code is NOT on these disks]**
 
 Per the user, CPT had a way to erase a data disk. cpt2489 has a whole disk-utility suite
