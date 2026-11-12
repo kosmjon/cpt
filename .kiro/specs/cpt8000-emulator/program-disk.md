@@ -757,6 +757,54 @@ just ended.
 Not traced: 37.04 (the editor's DFH case), 37.05, the 10H style bit, and what Outline levels
 5–7 look like (from the tables: `a)`, `(1)`, `(a)`, then `i)`).
 
+## The Spelling Verifier **[CONFIRMED by disassembly of operation 1 on cpt.img; the lexicon's format is unknown]**
+
+Operation 1 on cpt.img adds the Spelling Verifier (its OP document: "SPELLING VERIFIER,
+BACKGROUND SEARCH, & OUTLINER ADDED"). It needs a **main lexicon** (the spelling dictionary),
+which isn't on either disk image. **Booting operation 1 (CODE + O, 1, RETURN) and using the
+verifier shows message 8.6, "SYSTEM CANNOT READ MAIN LEXICON."**
+
+**The code** is **segment 38H (56)**, block 2, 11 functions (8022H onward). Operation 1 loads
+it and segment 1AH (26); operation 0 loads neither. (The prompt
+`SPELLING/=On =Page check =Word list =Off` is in the prompt table on both disks.)
+
+**Finding the main lexicon** (88FEH–89F1H). It isn't a document looked up by name:
+1. For drives 0, 1 and 2 in turn, check the drive is ready (8C90H returns 01 or 05), then
+   read **sector 0, the volume label**.
+2. Label bytes **6AH–6CH** hold the lexicon's disk address: 3 bytes, big-endian like the rest
+   of the filesystem, passed to the disk request at 0497H–0499H. If they're all zero, try the
+   next drive.
+3. If no drive has one: message 8.6 (8BFCH). If one does: read the lexicon's header at that
+   address (6 bytes copied to 8CD6H, 89E2H–89FFH). The data reads start at the address + 200H
+   and go 16 × 256 bytes (4 KB) at a time (8B74H) [whether the address counts sectors, and so
+   what the 200H offset skips, isn't confirmed]. A failed read there is message 8.6 too.
+
+cpt.img, cpt2489 and the blank data disk all have zeros at label 6AH–6CH, so the main lexicon
+was most likely **a separate lexicon disk**, probably used in station 2, whose label points at
+the dictionary [HYPOTHESIS for the station]. No image of one is known.
+
+**Customised lexicons.** The verifier also reads every document named `LEX` to `LEX9999999`
+(a name key range at 8B53H/8B63H, as the patch-page processor uses `.P` to `.P9`), up to
+four, and adds their words (8A82H–8B13H). cpt.img has one, **LEX** ("LEX for Miscellaneous
+Disk", 284 bytes): one word per line, names and abbreviations such as AIRMO, PSA, SFO,
+kiripolsky, pratt, whitney. Its header block also carries leftover text from another document
+after its end mark. The messages:
+
+| Message | Text |
+|---|---|
+| 8.3 | CUSTOMIZED LEXICON IS FULL. |
+| 8.4 | YOU MAY ADD ONLY # MORE WORDS TO CUSTOMIZED LEXICON. |
+| 8.5 | WORD IS TOO LONG. |
+| 8.6 | SYSTEM CANNOT READ MAIN LEXICON. |
+
+Control pages on cpt.img have spelling fields (`SPELLING I [0=NORMAL]`, `[1=UPDATE
+LEXICON]`, `SPELLING [3=NORMAL]`), not tried.
+
+**Open:** the main lexicon's format (beyond a header and 4 KB reads), what 8C90H's status
+codes mean, which station the lexicon disk went in, and how the verifier is used once it has
+a lexicon (the `SPELLING` prompt's modes, the control-page fields). A real lexicon disk image
+would answer most of this.
+
 ## Disk utilities (DU30?) **[the messages CONFIRMED; the utilities' code is NOT on these disks]**
 
 Per the user, CPT had a way to erase a data disk. cpt2489 has a whole disk-utility suite
