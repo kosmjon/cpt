@@ -27,6 +27,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem The page's LOAD SAMPLE PROGRAM DISK button fetches cpt2489.img from next to the page (on
+rem GitHub Pages the workflow publishes it there). Copy it in if setup-disks.bat has made it.
+if exist "disk\cpt2489.img" (
+    copy /y "disk\cpt2489.img" "crates\cpt-wasm\web\" >nul
+) else (
+    echo Note: disk\cpt2489.img not found; run setup-disks.bat for the sample disk button.
+)
+
 rem The server sends Cache-Control: no-cache, so after a rebuild a plain reload gets the new
 rem cpt.js and cpt_wasm.wasm instead of the browser's old copies.
 python tools\serve_web.py 8080 crates\cpt-wasm\web

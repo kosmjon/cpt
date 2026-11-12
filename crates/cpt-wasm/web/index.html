@@ -57,6 +57,15 @@
         font: 13px system-ui, sans-serif;
         opacity: 0.75;
       }
+      .footnote.sample {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 900px;
+      }
+      .footnote.sample .power-btn {
+        flex: none;
+      }
       .footnote a {
         color: inherit; /* underlined, as links are by default */
       }
@@ -425,6 +434,16 @@
     </div>
 
     <div id="status">loading…</div>
+    <div class="footnote sample">
+      <button class="power-btn" id="sampleDisk" title="put the sample CPT program disk in drive 1 and start the system">
+        LOAD SAMPLE PROGRAM DISK
+      </button>
+      <span>
+        The CPT 8100 program disk with TTY (cpt2489). It is a copy in this browser tab only:
+        pages you file on it are lost when you reload, unless you eject the disk and keep the
+        download.
+      </span>
+    </div>
     <div class="footnote">
       Need a disk for drive 2?
       <a href="blank-data.img" download>blank-data.img</a> is a blank, formatted data disk. To file a

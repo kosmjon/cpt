@@ -1,0 +1,63 @@
+# Publish the browser emulator ("try it now") to GitHub Pages.
+#
+# Builds the wasm module, decodes the sample program disk (cpt2489.img) from the TeleDisk file
+# in the repository, and publishes them with the page. Nothing generated is committed.
+#
+# One-time setup: repository Settings > Pages > Build and deployment > Source: GitHub Actions.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push replaces a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build the wasm module
+        run: cargo build -p cpt-wasm --target wasm32-unknown-unknown --release
+
+      - name: Decode the sample program disk
+        run: python3 tools/setup_disks.py --out disks
+
+      - name: Stage the site
+        run: |
+          mkdir -p site
+          cp crates/cpt-wasm/web/index.html crates/cpt-wasm/web/cpt.js \
+             crates/cpt-wasm/web/real-cpt.js crates/cpt-wasm/web/speaker-audio.js \
+             crates/cpt-wasm/web/blank-data.img site/
+          cp target/wasm32-unknown-unknown/release/cpt_wasm.wasm site/
+          cp disks/cpt2489.img site/
+          ls -l site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

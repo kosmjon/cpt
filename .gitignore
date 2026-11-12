@@ -11,6 +11,8 @@ cpm/*.img
 
 # wasm build artifact copied into the web dir (rebuilt from source)
 crates/cpt-wasm/web/*.wasm
+# the sample program disk run-web.bat copies next to the page (decoded from cpt2489.td0)
+crates/cpt-wasm/web/cpt2489.img
 
 # Python bytecode from the tools
 __pycache__/

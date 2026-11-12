@@ -5,8 +5,19 @@ Ideas that have been assessed but not started. Bugs and small fixes are in `bugs
 ## "Try it now" on GitHub Pages
 
 Offer the browser emulator on GitHub Pages, so people can try the CPT without installing
-anything. Assessed 2026-11, no code changed yet. **Feasible**: the page is already a static
-site.
+anything. Assessed 2026-11. **Built 2026-11**, with cpt2489 as the published disk (the
+owner's choice):
+- `.github/workflows/pages.yml` builds the wasm, decodes `cpt2489.img` and publishes the site
+  on every push to `main`.
+- The page's **LOAD SAMPLE PROGRAM DISK** button fetches `cpt2489.img` into drive 1, with a
+  note that the copy is the tab's own and is lost on reload unless ejected and downloaded.
+  `run-web.bat` copies the disk in for local use.
+- The README has the "Try it now" link, <https://kosmjon.github.io/cpt/>.
+
+**Still to do:** turn Pages on (Settings > Pages > Source: GitHub Actions), push, check the
+first deployment, then the browser tests under "Points to check before publishing".
+
+The assessment follows.
 
 ### What already fits
 
