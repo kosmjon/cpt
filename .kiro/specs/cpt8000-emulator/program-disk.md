@@ -434,6 +434,40 @@ The system's own entry points are a jump table at 0040H–006CH. For example: 00
 allocate a display page, 005EH delay (1603H), 0061H show a message (151AH), 0064H the fatal
 trap (15C1H).
 
+**No on-demand loading of segments** [CONFIRMED by disassembly and by running cpt.img]. All
+segments are loaded once, at start-up; nothing loads a segment into the upper blocks when it
+is first called. The evidence:
+
+1. **A call to a missing segment returns without loading it.** If the present flag is 0, the
+   dispatcher (12DEH) jumps to 1369H, which pops the registers, skips the call's two inline
+   bytes and returns. There is no disk request and no attempt to fetch the segment.
+2. **The segment table is only written during start-up.** A `--watch w:0174-0373` run from
+   power-on through a session that went well past start-up saw:
+   - DMA writes up to about 0.14M cycles, as the early loader reads the table in;
+   - the stage-3 loader clearing it (60FCH–60FFH, about 0.88M cycles);
+   - the stage-3 loader filling in each segment's entry from the operation's load map (647DH,
+     64E5H, about 29.8M cycles);
+   - one write at 26F7H (42.6M cycles) that marks segment 03 not present. It looks like a
+     start-up-only segment being released after use [HYPOTHESIS: not traced].
+
+   After 80M cycles (settled), nothing touched the table during IN RC-L1, CODE + L, CODE + P,
+   CODE + H, PRINT, PAGE + SKIP and IN LEGAL.
+3. **No disk read lands in 8000H–FFFFH after start-up.** With `--watch w:8000-FFFF
+   --watch-from 80000000` over the same kind of session, there were no DMA writes there. All
+   28 sector reads went to the document buffers at 2800H–2BFFH in bank 0.
+
+The only way to change the loaded set is **CODE + O** (far call 28.05), which restarts the
+system with another operation's load map (see "Operations"): the whole set is swapped, not
+single segments.
+
+Not ruled out:
+- The features not exercised: the spelling verifier, background search, the outliner, SRS
+  and TTY.
+- An overlay read into a bank-0 buffer and copied up by the CPU, without DMA. It would still
+  have to set its segment-table entry to be callable, and the table didn't change.
+- The load map's per-entry flag byte is still undecoded, so it could mean something like
+  "load later", though nothing observed used it that way.
+
 ## The editor's key dispatch **[CONFIRMED by tracing the running system]**
 
 How a key reaches its handler, found by stopping the emulator at each step after a key press:

@@ -1,3 +1,5 @@
+(Larger ideas that aren't bugs, such as a "try it now" page, are in `future-tasks.md`.)
+
 * line spacing > 1 reveals white-on-black dot lines.
   * fixed: the inserted blank line is a lone 80H (the ruler's column tick) in a text row. Only
     ruler rows are white on black now, and the browser draws that 80H as a tiny faint dot on
