@@ -5,6 +5,12 @@ processing systems (CPT 8000 / 9000 and related), which were written in **MOL80*
 Machine-Oriented Language for the Intel 8080, used by CPT (Eden Prairie, MN) in the late
 1970s and early 1980s.
 
+**Try it now: <https://kosmjon.github.io/cpt/>.** The emulator runs in your browser, with
+nothing to install. Press **LOAD SAMPLE PROGRAM DISK** to boot the CPT 8100 program disk
+with TTY (cpt2489). The disk is a copy in your browser tab only: pages you file on it are
+lost when you reload, unless you eject it and keep the download. (The page is published by
+`.github/workflows/pages.yml` on every push to `main`.)
+
 ![The real CPT word-processing software running in the browser emulator: a letter on the
 CPT screen with the title line, the ruler and the reverse-video rows, next to the
 special-key panel and the POWER and RESET buttons](CPT%208000%20Emulator.png)

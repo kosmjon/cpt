@@ -14,6 +14,8 @@ const PAGE = "#e8f0f0"; // the screen's white (slight cyan tint)
 const INK = "#101418"; // its black
 const DOT = "#7a8486"; // the faint dot of a system-inserted blank line
 const GLASS_OFF = "#22272a"; // a powered-off tube
+// The sample program disk the page offers (the TTY disk, decoded from cpt2489.td0).
+const SAMPLE_DISK = "cpt2489.img";
 // Shown while the power is on and nothing is running (no disk in drive 1).
 const INSERT_DISK_MESSAGE = "PLEASE INSERT PROGRAM DISK";
 
@@ -417,21 +419,50 @@ function setupDrives(ws) {
     const d = pending;
     pending = null;
     if (!file || d === null) return;
-    const buf = new Uint8Array(await file.arrayBuffer());
+    insertDisk(d, new Uint8Array(await file.arrayBuffer()), file.name);
+  });
+
+  // Put a disk image in drive d. Returns false (and says so) if it isn't a CPT disk image.
+  function insertDisk(d, buf, name) {
     if (!real.insert(d, buf)) {
-      statusEl.textContent = `${file.name}: not a CPT disk image (${w.cpt_real_disk_bytes()} bytes)`;
-      return;
+      statusEl.textContent = `${name}: not a CPT disk image (${w.cpt_real_disk_bytes()} bytes)`;
+      return false;
     }
-    names[d] = file.name;
+    names[d] = name;
     // A program disk in drive 1 of an idle, powered machine: boot it.
     if (d === 0 && ws.powered && !real.running) real.start();
     refresh(0);
     refresh(1);
-  });
+    return true;
+  }
+
+  // "Load the sample program disk": fetch cpt2489.img (published next to the page on GitHub
+  // Pages; run-web.bat copies it in locally) and put it in drive 1. The copy lives only in this
+  // tab: writes to it are lost on reload unless the disk is ejected and the download kept.
+  const sampleBtn = document.getElementById("sampleDisk");
+  if (sampleBtn && sampleBtn.addEventListener) {
+    sampleBtn.addEventListener("click", async () => {
+      if (real.drive(0).loaded) {
+        statusEl.textContent = "drive 1 already has a disk: eject it first";
+        return;
+      }
+      sampleBtn.disabled = true;
+      try {
+        const resp = await fetch(SAMPLE_DISK);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        insertDisk(0, new Uint8Array(await resp.arrayBuffer()), SAMPLE_DISK);
+      } catch (e) {
+        statusEl.textContent = `could not load ${SAMPLE_DISK} (${e.message}); run setup-disks.bat, or insert a disk image`;
+      } finally {
+        sampleBtn.disabled = false;
+      }
+    });
+  }
 
   refresh(0);
   refresh(1);
   return {
+    insertDisk,
     update() {
       for (const d of [0, 1]) {
         ledEl(d).classList.toggle("on", ws.powered && real.drive(d).active);

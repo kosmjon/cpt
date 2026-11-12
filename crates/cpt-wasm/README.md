@@ -30,7 +30,23 @@ python tools/serve_web.py 8080 crates/cpt-wasm/web
 ```
 
 Open the served page and insert a CPT program disk image in drive 1 (see "The real CPT
-system" below).
+system" below), or press **LOAD SAMPLE PROGRAM DISK**. That button fetches `cpt2489.img`
+from next to the page: `run-web.bat` copies it there from `disk/` (made by
+`setup-disks.bat`; the copy is gitignored), and on GitHub Pages the workflow publishes it.
+
+## GitHub Pages ("try it now")
+
+`.github/workflows/pages.yml` publishes the page to <https://kosmjon.github.io/cpt/> on every
+push to `main` (or by hand: Actions > Pages > Run workflow). It builds the wasm module,
+decodes `cpt2489.img` from the TeleDisk file with `tools/setup_disks.py`, and publishes
+`index.html`, the three scripts, `cpt_wasm.wasm`, `cpt2489.img` and `blank-data.img`. Nothing
+generated is committed. One-time setup: repository Settings > Pages > Build and deployment >
+Source: **GitHub Actions**.
+
+Each visitor's tab has its own copy of the disk, in memory. Pages only serves files, so
+nothing a visitor files ever reaches the server or anyone else. Filed pages last until the
+tab is reloaded or closed; ejecting a disk the system wrote to offers it as a download, which
+can be inserted again later.
 
 ## Quick check without a browser
 

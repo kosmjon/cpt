@@ -111,7 +111,11 @@ printerPower.sub["span:last-child"] = el();
 const paperFeed = el();
 paperFeed.sub[".empty"] = el();
 const printerState = el();
+// The sample program disk button, and what fetch("cpt2489.img") serves (set by the check).
+const sampleDisk = el("button");
+let sampleBytes = null;
 const byId = {
+  sampleDisk,
   screen: canvas, status, fileInput, specialKeys, powerBtn, resetBtn,
   printerPower, printerTear: el("button"), printerSave: el("button"), paperFeed, printerState,
 };
@@ -175,7 +179,13 @@ Object.assign(globalThis, {
   requestAnimationFrame: (f) => {
     rafCallback = f;
   },
-  fetch: async () => ({ arrayBuffer: async () => wasmBytes }),
+  // The wasm module, or the sample disk (whatever sampleBytes holds; null = not published).
+  fetch: async (url) =>
+    url === "cpt2489.img"
+      ? sampleBytes
+        ? { ok: true, status: 200, arrayBuffer: async () => sampleBytes.buffer.slice(0) }
+        : { ok: false, status: 404 }
+      : { ok: true, status: 200, arrayBuffer: async () => wasmBytes },
 });
 // The page's classic scripts declare globals; load them the same way.
 Object.assign(globalThis, require("./speaker-audio.js"), require("./real-cpt.js"));
@@ -495,5 +505,27 @@ await resetBtn.dispatch("click");
 await frames(1);
 assert.ok(status.textContent.startsWith("starting the CPT system"), `reset boots again: ${status.textContent}`);
 console.log("power and reset: OK");
+
+// LOAD SAMPLE PROGRAM DISK. With drive 1 full it says so and leaves the disk alone.
+await sampleDisk.dispatch("click");
+assert.equal(status.textContent, "drive 1 already has a disk: eject it first");
+// Empty drive 1 (power off, eject), power on: the idle screen.
+await powerBtn.dispatch("click");
+await frames(1);
+await drives[0].sub[".drive-btn"].dispatch("click");
+await powerBtn.dispatch("click");
+await frames(2);
+assert.ok(insertMessageShown(), "idle, waiting for a disk");
+// Not published (local run without setup-disks): a message, no disk.
+await sampleDisk.dispatch("click");
+assert.ok(status.textContent.startsWith("could not load cpt2489.img (HTTP 404)"), status.textContent);
+assert.equal(drives[0].classList.contains("loaded"), false);
+// Published: it goes in drive 1 and the system boots from it.
+sampleBytes = image;
+await sampleDisk.dispatch("click");
+await frames(1);
+assert.equal(drives[0].classList.contains("loaded"), true, "the sample disk is in drive 1");
+assert.ok(status.textContent.startsWith("starting the CPT system"), `the sample disk boots: ${status.textContent}`);
+console.log("sample program disk button: OK");
 console.log("page checks OK");
 process.exit(0);
