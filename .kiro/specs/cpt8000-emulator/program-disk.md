@@ -544,7 +544,7 @@ CODE + a letter opens the CPT's menus and modes, seen on the title line:
 | CODE + O | 36 | `OPERATION NUMBER`: restarts into another operation (system build) on the program disk (see "Operations") |
 | CODE + H | 1E | `Automatic Wraparound Manual` (hyphenation) |
 | CODE + S | 22 | `Direct Control page` |
-| CODE + A | 28 | `1-20` |
+| CODE + A | 28 | `1-20` Alphabetic Sort | 
 | CODE + U, T, R | 30, 24, 2C | `CODE:` prompts (code entry) |
 | CODE + N | 37 | `.00` (decimal alignment?) |
 | CODE + C | 1B | centers the line, then a new line |
@@ -604,8 +604,8 @@ function code a key produces is listed above. What the remaining keys do:
     works like normal editing.
 
   This is a "bring in a stored document" (merge or recall) key, not MOVE or INSERT. Per the
-  user it is the key under WORDPAK, labelled with a staple shape (a bar with a leg down at
-  each end); it's mapped as STAPLE in the browser panel. It fits that column: IN, OUT, PRINT
+  user it is the **HAT** key, under WORDPAK. (The browser panel draws it with a bar-and-legs
+  icon and its code still names it STAPLE, `CPT_KEY.STAPLE`.) It fits that column: IN, OUT, PRINT
   and 05H are the four keys whose handlers return a command (1–4) to the command level. Its
   number doesn't follow the column's low-digit pattern (that would give 1DH), but PAGE (5FH)
   breaks the pattern too.
@@ -849,7 +849,7 @@ strings) after start-up]:
   CODE + I. CODE + I treats every page as a communications control page and shows
   "INITIALIZATION INCOMPLETE".
 
-Not yet tried: keys 1CH, 4CH and 5CH, and CODE + staple.
+Not yet tried: keys 1CH, 4CH and 5CH, and CODE + HAT.
 
 **Where the code might be:**
 - Neither the strings nor code using them is in memory during a normal session.
@@ -1466,7 +1466,7 @@ while no other key event arrives, **if the key's code is on a repeat list**.
 
   Keys **not** on the list don't repeat. Among them: the other letters and digits, CHAR,
   WORD, LINE, PARA, PAGE, IN, OUT, PRINT, STOP, HOLD, MAR SET, MAR REL, CLEAR TAB SET, CODE
-  and the staple key. A held letter types once [CONFIRMED by running it].
+  and the HAT key. A held letter types once [CONFIRMED by running it].
 
 - **An alternate set.** DDC9H uses a second table at E049H instead of DEF5H when the flag at
   E203H (toggled by E1D9H) or 04C6H is set. It has its own key table (E053H) and repeat list

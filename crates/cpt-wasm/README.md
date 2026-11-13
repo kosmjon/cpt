@@ -130,7 +130,7 @@ keyboard, and the CPT's own auto-repeat (below) does the repeating.
 
 **The special-key panel.** These keys send their real key numbers: CODE, IN, OUT, PRINT,
 CHAR, WORD, LINE, PARA, PAGE, HOLD, MAR SET, MAR REL, CLEAR TAB SET, UP, DOWN, SKIP, STOP,
-ADJ, PROG, ERASE, and the staple key.
+ADJ, PROG, ERASE, and the HAT key.
 - **UP and DOWN** move by the selected unit. UP moves the text up (on through the document)
   and DOWN moves it down. For example, CODE + IN and Enter build the table of contents in the
   upper screen; then PAGE, DOWN scrolls it all into the lower screen.
@@ -146,7 +146,8 @@ ADJ, PROG, ERASE, and the staple key.
 - **MAR REL** is the margin release.
 - **PROG** is the keyboard program. Latch CODE and press PROG to start recording keys ("PROG"
   shows on the title line), CODE + PROG again to end it, and PROG to play it back.
-- **The staple key** is under WORDPAK, drawn as a staple. It takes the text on the typing
+- **The HAT key** is under WORDPAK (the panel draws it with a bar-and-legs icon; the code
+  calls it STAPLE). It takes the text on the typing
   line as a document name and brings that document in at the typing line, e.g. type `wn` at
   the start of a line, then press it.
 - **ERASE** (4FH) is a hypothesis: it blanks the character under the cursor and moves on.

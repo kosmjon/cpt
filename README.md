@@ -173,7 +173,7 @@ cargo run -p cpt-run -- --disasm <file> <offset> <len> <origin>
 - **Documents:** opening them (IN), scrolling with UP/DOWN by unit, PAGE, SKIP, the units
   CHAR, WORD, LINE, PARA and PAGE, and the table of contents (CODE + IN).
 - **Editing:** typing, RETURN, backspace, tabs, CLEAR TAB SET, MAR SET/REL, HOLD, the
-  keyboard program (PROG), the CODE + letter menus, and the staple key (brings in the
+  keyboard program (PROG), the CODE + letter menus, and the HAT key (brings in the
   document named on the typing line).
 - **Keys:** the CPT's own auto-repeat for the keys on its repeat list.
 - **The speaker:** the start-up chime and key clicks.
@@ -294,7 +294,7 @@ Design and planning documents live under `.kiro/specs/`:
   about the real system:
   - `program-disk.md` covers the disk format and directory, boot, memory and banks,
     segments, the display list, the keyboard (key numbers, dispatch, auto-repeat), the
-    speaker, the staple key and patch pages.
+    speaker, the HAT key and patch pages.
   - `segments-cpt2489.md` is the TTY disk's segment map (hex and decimal) and the serial
     communications.
   - `boot-sequence.md`, `memory-map.md`, `special-keys.md` and `cpm-over-serial.md`.

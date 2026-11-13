@@ -54,7 +54,7 @@ on demand, hasn't been checked [VERIFY].
 | 09 | 9 | block 2 | F3ABH | 1 | 1 | same | |
 | 0A | 10 | block 0 | 800AH | 1 | 2 | same | |
 | 0B | 11 | block 0 | 844CH | 3 | 3 | same | |
-| 0C | 12 | block 2 | 800AH | 50 | 54 | same | **the filer** (0C.29 finds a document / probes a drive; 0C.00 loads one for the staple key) |
+| 0C | 12 | block 2 | 800AH | 50 | 54 | same | **the filer** (0C.29 finds a document / probes a drive; 0C.00 loads one for the HAT key) |
 | 0E | 14 | block 1 | ED43H | 7 | 4 | block 2 | |
 | 11 | 17 | bank 0 | 1DD5H | 1 | 0 | **not present** | probably the **serial driver** in bank 0: the 8251 code at 1DDDH–1F03H follows its table [HYPOTHESIS]. Its one function slot is empty, and nothing far-calls it |
 | 12 | 18 | block 0 | 8668H | 5 | 16 | same | |
@@ -71,7 +71,7 @@ on demand, hasn't been checked [VERIFY].
 | 2E | 46 | block 1 | AFFAH | 7 | 8 | same | |
 | 2F | 47 | block 1 | CBFCH | 10 | 9 | same | |
 | 30 | 48 | block 0 | F4BAH | 2 | 1 | same | |
-| 31 | 49 | block 0 | EC7BH | 1 | 2 | block 1 | the staple key's nested level (31.00) |
+| 31 | 49 | block 0 | EC7BH | 1 | 2 | block 1 | the HAT key's nested level (31.00) |
 | 36 | 54 | block 0 | DF17H | 2 | 2 | same | |
 | 37 | 55 | — | — | — | 7 | block 1, 9 funcs | **not present here**; the editor still calls it from 7 sites |
 | 3A | 58 | block 2 | E23EH | 12 | 20 | block 0 | the screen: 3A.00 builds the display list, 3A.0B swaps the status row's jump |
