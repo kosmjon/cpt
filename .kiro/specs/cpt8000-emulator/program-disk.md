@@ -429,10 +429,11 @@ to a document, and transmission from the keyboard ("Using TTY mode" in that docu
 emulator's 8251 holds its transmit request off until `10H` is written to port 00H; without that,
 TTY mode corrupted its own control block.
 
-The system's own entry points are a jump table at 0040H–006CH. For example: 0040H start-up
-(0D98H), 0046H the far-call dispatcher, 0052H yield (1143H), 0058H wait (11B4H), 005BH
-allocate a display page, 005EH delay (1603H), 0061H show a message (151AH), 0064H the fatal
-trap (15C1H).
+The system's own entry points are a jump table at 0040H–006CH: the Multitasking Monitor's
+(see "The Multitasking Monitor (MT)" below). For example: 0040H start-up (0D98H), 0046H the
+far-call dispatcher, 0052H give up the CPU (1143H), 0058H lock (11B4H), 005BH the 256-byte
+page pool (0F72H), 005EH sleep (1603H), 0061H show a message (151AH), 0064H the fatal trap
+(15C1H).
 
 **No on-demand loading of segments** [CONFIRMED by disassembly and by running cpt.img]. All
 segments are loaded once, at start-up; nothing loads a segment into the upper blocks when it
@@ -467,6 +468,105 @@ Not ruled out:
   have to set its segment-table entry to be callable, and the table didn't change.
 - The load map's per-entry flag byte is still undecoded, so it could mean something like
   "load later", though nothing observed used it that way.
+
+## The Multitasking Monitor (MT) **[CONFIRMED by disassembly of cpt.img; not yet watched running]**
+
+Per the user, the CPT's Multitasking Monitor has entry points called MT ALLOC (a 256-byte
+aligned work block), MT RELEASE and MT BREAK (a sleep). Those names aren't in the code, so
+which routine each one is comes from what the routines do [HYPOTHESIS for the names].
+
+**Where it is.** Programs reach the Monitor through the fixed jump table in bank 0 at
+0040H–006CH, not by far call (so it can be called from any bank). Its code is in bank 0, in
+the areas of segments 1 and 2. A segment's function table sits at the start of its code (seg
+04: table 16A6H, function 16A9H; seg 07: 1CEEH, 1CF1H), so bank 0 divides up as below
+[HYPOTHESIS that the table always marks the start]:
+
+| Segment | Area | Monitor routines in it |
+|---|---|---|
+| 00 | 037FH–0614H | (0388H) |
+| **01** | **0615H–1512H** | start-up, page pool, task switch, timer interrupt, lock, task exit, bank select, task start, far call |
+| **02** | **1513H–16A5H** | message, fatal trap, request wait, sleep, display-page allocate (1632H = 02.02) |
+
+So the core of the Monitor shares segment 1 with the disk functions (01.00–01.02) and the
+function lookup (01.04 at 1374H, in the middle of it); almost none of it is in segment 1's
+function table.
+
+**The entry points** (call sites counted in the cpt.img dump):
+
+| Entry | Code | What it does | Sites |
+|---|---|---|---|
+| 0040H | 0D98H | start-up | |
+| 0043H | 1243H | select the bank in A (04A7H, `OUT 03H`), returning the previous one | 1 |
+| 0046H | 12DEH | far call (segment and function inline; see "Segments, banks and functions") | 423 |
+| 0049H | 12AFH | another task-start form [HYPOTHESIS] | 0 |
+| 004CH | 1257H | **start a task**: build its stack, with 11D9H as its return address, and link its control block into the ring (1222H) | 8 |
+| 004FH, 0055H | `RET` | empty slots | |
+| 0052H | 1143H | **give up the CPU**: switch to the next task (below) | 18 |
+| 0058H | 11B4H | **lock** (a binary semaphore, below) | 54 |
+| 005BH | 0F72H | **the page pool** (MT ALLOC / MT RELEASE, below) | 114 |
+| 005EH | 1603H | **sleep** (MT BREAK, below) | 37 |
+| 0061H | 151AH | show a message | |
+| 0064H | 15C1H | fatal trap | |
+| 0067H | 15DEH | **wait for a device request** (below) | |
+| 006AH | 10F2H | set up the page pool (start-up) | |
+
+**Tasks and switching.** Each task has a control block; the blocks are linked in a ring, and
+04A8H points to the current one. A block holds the task's saved stack pointer, its bank and
+a time-slice count (+2, reloaded from +3).
+- **1143H (0052H)** saves the current task's stack pointer and bank, follows the link to the
+  next block, selects that task's bank (`OUT 03H`), loads its stack pointer and returns into
+  it. Scheduling is round-robin: no priorities.
+- **The timer interrupt (116FH)** adds one to the 16-bit tick count at 04A6H each tick
+  (100 Hz), and counts down the task's slice. When the slice runs out it calls 1143H itself,
+  so switching is **preemptive** as well as voluntary. It never switches while the
+  interrupted code is in the Monitor (below 1257H: it checks the return address on the stack).
+- **11D9H, task exit:** a task's code returns here (task start pushed it). It unlinks the
+  block from the ring, switches to the next task and releases the task's page (0F72H, A = 2).
+
+**MT ALLOC / MT RELEASE: 005BH → 0F72H**, one entry point for a pool of 256-byte pages,
+chosen by A. The pool's state is at 14F0H–14F6H (a lock byte, the free list, the free count,
+the first and last page); the routine holds the pool's lock while it works.
+
+| A | Does | Notes |
+|---|---|---|
+| 0 | allocate a page; its address in H (L = 0) | waits, giving up the CPU, while none are free |
+| 1 | allocate only if 6 or more are free | otherwise returns A = 1 at once (a reserve) |
+| 2 | release the page H | only if it's in the pool's range and not already free |
+| 3 | how many pages are free | in L |
+| 4 and up | the same on another pool, chosen by the current bank (tables 14F7H, 14FDH, 1503H) | [HYPOTHESIS] |
+
+**MT BREAK, the sleep: 005EH → 1603H** [HYPOTHESIS for the name; if MT BREAK means "give up
+the CPU now" it's 0052H instead]. HL is the interval: H whole seconds (100 ticks each) and L
+hundredths (ticks). It gives up the CPU over and over (0052H) until that many ticks have
+passed on 04A6H, so other tasks run meanwhile. For example the printer driver waits 0.1 s
+between status reads with `LXI H,000AH`, and `LXI H,0032H` is half a second.
+
+**Signalling between tasks.**
+- **The lock, 0058H → 11B4H, is a binary semaphore** on the byte at HL:
+  - A = 0, **wait (P)**: while the byte isn't 0, give up the CPU; then set it to 1.
+  - A = 1, **try**: take it if it's 0, otherwise return nonzero at once.
+  - A = 2, **release (V)**: set it to 0.
+
+  Tasks can use it to signal as well as to exclude each other: start the byte at 1 (taken);
+  the waiting task calls wait, and the signalling task calls release. It's binary, not
+  counting (two releases before the waiter runs count as one).
+
+  It needs no interrupts off, because the timer interrupt never switches tasks below 1257H,
+  and 11B4H is below it: its test and its set can't be split [inferred from the code, which
+  explains the 1257H rule].
+- **Request flags, 0067H → 15DEH:** a table at 04F1H, one byte per device or request (A
+  selects). A task waits while its flag is 1 (busy), giving up the CPU, then clears it and
+  returns a status from its value. The printer driver reads the same table (2 or more is an
+  error) [HYPOTHESIS for the status values; who sets the flags, the request starter or the
+  device's interrupt, isn't traced].
+
+**What it doesn't have:** no queue of waiting tasks (every wait is a loop that gives up the
+CPU and checks again, and waiting tasks stay in the ring), no priorities, no counting
+semaphore and no message passing. Tasks would share data in memory under a lock, or poll.
+
+**Open:** 12AFH (the second task-start form) and 0043H's one caller; the request flags'
+writers and status values; the other page pools (A = 4 and up); what 0388H (segment 0) is;
+and watching a task switch and a lock wait in a run, to confirm the time-slice rule.
 
 ## The editor's key dispatch **[CONFIRMED by tracing the running system]**
 
