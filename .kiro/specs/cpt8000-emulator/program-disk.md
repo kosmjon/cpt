@@ -519,7 +519,14 @@ a time-slice count (+2, reloaded from +3).
 - **The timer interrupt (116FH)** adds one to the 16-bit tick count at 04A6H each tick
   (100 Hz), and counts down the task's slice. When the slice runs out it calls 1143H itself,
   so switching is **preemptive** as well as voluntary. It never switches while the
-  interrupted code is in the Monitor (below 1257H: it checks the return address on the stack).
+  interrupted code is **below 1257H** (118FH–119BH compare the return address on the stack
+  with 1257H). That protected range is everything in bank 0 up to task start: the RST
+  vectors, segment 0, and segment 1 up to 1256H (the disk functions 01.00–01.02, start-up, the
+  page pool, the switch itself, the lock, task exit, bank select). Segment 1 from 1257H on
+  (task start, the far-call dispatcher, 01.04) and segment 2 (sleep, the request wait,
+  messages) can be switched out like any other code, as can everything in the upper blocks.
+  So 1257H isn't a segment boundary: it's the first routine after the part of segment 1 that
+  must not be interrupted, and the layout looks arranged for it [HYPOTHESIS].
 - **11D9H, task exit:** a task's code returns here (task start pushed it). It unlinks the
   block from the ring, switches to the next task and releases the task's page (0F72H, A = 2).
 
@@ -552,8 +559,8 @@ between status reads with `LXI H,000AH`, and `LXI H,0032H` is half a second.
   counting (two releases before the waiter runs count as one).
 
   It needs no interrupts off, because the timer interrupt never switches tasks below 1257H,
-  and 11B4H is below it: its test and its set can't be split [inferred from the code, which
-  explains the 1257H rule].
+  and 11B4H is below it: its test and its set can't be split [inferred from the code; it
+  would explain why the lock, the page pool and the switch all sit below 1257H].
 - **Request flags, 0067H → 15DEH:** a table at 04F1H, one byte per device or request (A
   selects). A task waits while its flag is 1 (busy), giving up the CPU, then clears it and
   returns a status from its value. The printer driver reads the same table (2 or more is an
