@@ -60,7 +60,9 @@
 //!   display continues at `b b` (which the builder sets to the byte after it). The optional
 //!   row is the status row (column, line, unit). The screen shows its characters at the right
 //!   end of the title row, so the decoder merges it there instead of adding a row (per the
-//!   user; how the hardware does it is unknown).
+//!   user; how the hardware does it is unknown). Only a slotted (B0) row is merged: the TOC
+//!   builder also leaves a C3 for about 3,300 cycles while it links in each new plain line,
+//!   and that line stays in its place.
 //! - `C4`: **underline** the next character. A document's underlined text has a C4 before each
 //!   character (JP-M24's `M E M O R A N D U M`), and B0 before the plain ones. The cursor and a
 //!   menu's selection are the same attribute: the blink routine at 93C0H swaps a B0 slot with
@@ -179,7 +181,10 @@ pub fn render<F: FnMut(u16) -> u8>(mut read: F, head: u16, max_rows: usize) -> C
                     let mut done = std::mem::take(&mut row);
                     let is_ruler = is_ruler_row(&done, row_c0, row_b3);
                     finish_row(&mut done, row_has_slots || is_ruler);
-                    if status_row && !rows.is_empty() {
+                    // Only a slotted row is the status row. The TOC builder also leaves a
+                    // `C3` for a moment while it links in a new (plain) line; that line stays
+                    // in its place rather than flashing into the title row.
+                    if status_row && row_has_slots && !rows.is_empty() {
                         merge_status(&mut rows[0], &done);
                         status_merged = true;
                     } else {
@@ -508,6 +513,28 @@ mod tests {
         assert!(s.row_is_reverse(0));
         assert_eq!(text(&s, 1), "T");
         assert_eq!(text(&s, 2), "B");
+    }
+
+    #[test]
+    fn a_plain_row_behind_a_c3_stays_in_place() {
+        // The TOC builder links in a new line through a C3 for a moment (C2 -> C3 at the
+        // previous line's end). That line has no slots: it is not the status row, so it is
+        // shown where it is, not merged into the title.
+        let mut l = vec![0xC0];
+        for &c in b"CONTENTS" {
+            l.extend([0xB0, c]);
+        }
+        l.extend([0x0D, 0xC0, b'T', 0x0D]);
+        let c3 = 0x6000 + l.len() as u16;
+        let after = c3 + 5;
+        l.extend([0xC3, 0x00, 0x00, after as u8, (after >> 8) as u8]);
+        l.extend(b"D-PAGE");
+        l.extend([0x0D, 0xB1]);
+        let s = run(0x6000, &l, 0x6000);
+        assert!(!s.status_merged);
+        assert_eq!(s.rows.len(), 3);
+        assert_eq!(text(&s, 0), "CONTENTS");
+        assert_eq!(text(&s, 2), "D-PAGE");
     }
 
     #[test]

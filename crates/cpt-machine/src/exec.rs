@@ -11,16 +11,20 @@ use i8080_cpu::Cpu;
 pub struct Executive {
     pub cpu: Cpu,
     pub machine: Machine,
+    /// The RST vector delivered by the last `step`, if it delivered one (hosts use it to
+    /// follow the display's retrace interrupt).
+    pub last_irq: Option<u8>,
 }
 
 impl Executive {
     pub fn new(cpu: Cpu, machine: Machine) -> Self {
-        Executive { cpu, machine }
+        Executive { cpu, machine, last_irq: None }
     }
 
     /// Execute one instruction, tick devices, and deliver a pending interrupt if enabled.
     /// Returns the cycles consumed by the instruction.
     pub fn step(&mut self) -> u32 {
+        self.last_irq = None;
         let cycles = self.cpu.step(&mut self.machine);
         self.machine.tick_devices(cycles);
 
@@ -33,6 +37,7 @@ impl Executive {
         if self.cpu.int_enabled {
             if let Some(vector) = self.machine.poll_irq() {
                 self.cpu.interrupt(vector, &mut self.machine);
+                self.last_irq = Some(vector);
             }
         }
         cycles

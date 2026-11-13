@@ -83,6 +83,11 @@ impl BankedMemory {
 
     // ---- loading helpers (used by the image loader / tests) ----
 
+    /// All of bank 0 (0000H-7FFFH).
+    pub fn bank0(&self) -> &[u8; BANK_SIZE] {
+        &self.bank0
+    }
+
     /// Load bytes into bank 0 starting at `offset` (0-based within bank 0).
     pub fn load_bank0(&mut self, offset: u16, bytes: &[u8]) {
         let start = offset as usize;

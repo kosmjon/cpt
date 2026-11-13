@@ -39,6 +39,33 @@ pub struct CptSystem {
     pub kb: usize,
     pub usart: usize,
     pub printer: usize,
+    /// The display memory as of the last vertical retrace (see [`CptSystem::run_cycles`]).
+    frame: FrameLatch,
+}
+
+/// The display's RST vector and period (60 Hz is a guess).
+pub const RETRACE_VECTOR: u8 = 6;
+pub const RETRACE_PERIOD: u32 = 33_333;
+
+/// If the retrace handler has not returned this long after it was entered, latch anyway.
+const HANDLER_LIMIT_CYCLES: u64 = 20_000;
+
+/// A latch older than this (no retrace delivered for about 4 frames, e.g. during start-up or
+/// with interrupts off) is stale: [`CptSystem::frame_screen`] decodes live memory instead.
+const STALE_CYCLES: u64 = 4 * RETRACE_PERIOD as u64;
+
+/// Bank 0 as the display would scan it: copied when the retrace handler (which applies the
+/// queued display-list patches at 0504H) returns. The real software makes its big screen
+/// changes between retraces and the beam scans after the handler, so a host that decodes
+/// from this copy never shows a half-made change, as a decode of live memory at an arbitrary
+/// moment can.
+struct FrameLatch {
+    bytes: Box<[u8; crate::memory::BANK_SIZE]>,
+    /// CPU cycle of the last copy; `None` until the first.
+    at: Option<u64>,
+    /// The retrace handler is running: its return address is on the stack at this SP, and it
+    /// was entered at this cycle.
+    pending: Option<(u16, u64)>,
 }
 
 impl CptSystem {
@@ -76,7 +103,7 @@ impl CptSystem {
         machine.attach_device(Box::new(InterruptAck::new(0x00)));
         // The display's vertical retrace on RST 6 (its handler applies queued display-list
         // updates). 60 Hz is a guess.
-        machine.attach_device(Box::new(TimerDevice::new(33_333, 6)));
+        machine.attach_device(Box::new(TimerDevice::new(RETRACE_PERIOD, RETRACE_VECTOR)));
         // The keyboard on 01H/02H, raising RST 2.
         let kb = machine.device_count();
         machine.attach_device(Box::new(CptKeyboard::new()));
@@ -91,7 +118,8 @@ impl CptSystem {
         machine.mem.load_bank0(0, &boot_sector);
         let mut cpu = Cpu::new();
         cpu.pc = 0;
-        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb, usart, printer }
+        let frame = FrameLatch { bytes: Box::new([0; crate::memory::BANK_SIZE]), at: None, pending: None };
+        CptSystem { exec: Executive::new(cpu, machine), fdc: fdc_dev, pit, ack, kb, usart, printer, frame }
     }
 
     /// Take both disks out (drive 1, drive 2), e.g. before a reset or power-off.
@@ -129,6 +157,49 @@ impl CptSystem {
         let m = &mut self.exec.machine;
         cpt_display::render(|a| m.read(a), DISPLAY_HEAD, max_rows)
     }
+
+    /// Run about `budget` cycles (like [`Executive::run_cycles`]), latching the display memory
+    /// each time the retrace handler finishes. Returns cycles run.
+    pub fn run_cycles(&mut self, budget: u64) -> u64 {
+        let start = self.exec.cpu.cycles;
+        while self.exec.cpu.cycles.wrapping_sub(start) < budget && !self.exec.is_terminally_halted() {
+            self.exec.step();
+            let now = self.exec.cpu.cycles;
+            if self.exec.last_irq == Some(RETRACE_VECTOR) {
+                // The return address was just pushed at SP; the handler is done when it is
+                // popped (SP above it). Interrupts nested in the handler only push lower.
+                self.frame.pending = Some((self.exec.cpu.sp, now));
+            } else if let Some((sp, entered)) = self.frame.pending {
+                if self.exec.cpu.sp > sp || now.wrapping_sub(entered) >= HANDLER_LIMIT_CYCLES {
+                    self.latch_frame();
+                }
+            }
+        }
+        self.exec.cpu.cycles.wrapping_sub(start)
+    }
+
+    fn latch_frame(&mut self) {
+        self.frame.bytes.copy_from_slice(self.exec.machine.mem.bank0());
+        self.frame.at = Some(self.exec.cpu.cycles);
+        self.frame.pending = None;
+    }
+
+    /// Cycles since the display memory was last latched (`None` if never).
+    pub fn frame_age(&self) -> Option<u64> {
+        self.frame.at.map(|at| self.exec.cpu.cycles.wrapping_sub(at))
+    }
+
+    /// Decode the screen as of the last retrace (driven by [`CptSystem::run_cycles`]), or live
+    /// memory if no retrace has been seen recently.
+    pub fn frame_screen(&mut self, max_rows: usize) -> CptScreen {
+        match self.frame.at {
+            Some(at) if self.exec.cpu.cycles.wrapping_sub(at) <= STALE_CYCLES => {
+                let b = &self.frame.bytes;
+                cpt_display::render(|a| b[(a & 0x7FFF) as usize], DISPLAY_HEAD, max_rows)
+            }
+            _ => self.screen(max_rows),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -151,5 +222,46 @@ mod tests {
         assert!(sys.floppy().image(1).is_none());
         // No display list yet: zeroed memory never ends a row or the screen.
         assert_eq!(sys.screen(10).ending, cpt_display::Ending::ByteLimit);
+    }
+
+    /// A boot sector whose retrace handler counts at 7001H while the main code halts.
+    fn retrace_counter(enable: bool) -> CptSystem {
+        let mut image = vec![0u8; cpt_floppy::cpt_geometry().total_bytes()];
+        let s = &mut image[16 * 256..17 * 256];
+        // Every RST vector: EI; RET.
+        for v in (8..0x40).step_by(8) {
+            s[v] = 0xFB;
+            s[v + 1] = 0xC9;
+        }
+        // 0000: LXI SP,7F00; EI (or DI); HLT; JMP 0003
+        s[..8].copy_from_slice(&[0x31, 0x00, 0x7F, if enable { 0xFB } else { 0xF3 }, 0x76, 0xC3, 0x03, 0x00]);
+        // 0030: PUSH PSW; LDA 7001; INR A; STA 7001; POP PSW; EI; RET
+        s[0x30..0x3B].copy_from_slice(&[0xF5, 0x3A, 0x01, 0x70, 0x3C, 0x32, 0x01, 0x70, 0xF1, 0xFB, 0xC9]);
+        CptSystem::boot(&image, READ_DELAY_CYCLES).expect("boots")
+    }
+
+    #[test]
+    fn the_frame_is_latched_when_the_retrace_handler_returns() {
+        let mut sys = retrace_counter(true);
+        sys.run_cycles(10 * RETRACE_PERIOD as u64 + 1000);
+        let live = sys.exec.machine.mem.bank0()[0x7001];
+        assert!(live >= 9, "the retrace handler ran about 10 times, got {live}");
+        assert!(sys.frame.at.is_some());
+        // Copied after the handler's update, not when it was entered.
+        assert_eq!(sys.frame.bytes[0x7001], live);
+        assert!(sys.frame.pending.is_none());
+        // A change made between retraces is not shown until the next one.
+        sys.exec.machine.mem.load_bank0(0x7002, &[0xAA]);
+        assert_eq!(sys.frame.bytes[0x7002], 0);
+        sys.run_cycles(RETRACE_PERIOD as u64 + 1000);
+        assert_eq!(sys.frame.bytes[0x7002], 0xAA);
+    }
+
+    #[test]
+    fn without_retraces_the_screen_is_decoded_live() {
+        let mut sys = retrace_counter(false);
+        sys.run_cycles(10 * RETRACE_PERIOD as u64);
+        assert!(sys.frame.at.is_none(), "interrupts are off: no retrace was delivered");
+        assert_eq!(format!("{:?}", sys.frame_screen(10)), format!("{:?}", sys.screen(10)));
     }
 }

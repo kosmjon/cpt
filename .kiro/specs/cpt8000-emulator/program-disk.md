@@ -290,6 +290,29 @@ walker over display memory (8580H, block 0), the scroll routine (BAC6H, block 2)
 blink (93C0H, block 0). `cpt_machine::cpt_display` decodes it; `cpt-run --cpt-boot` prints the
 screen.
 
+**What the browser shows: the frame latched at retrace.** On the real machine the beam scans
+the list after the retrace handler has applied its queue. The emulator used to decode live
+memory whenever the page drew, which could land mid-way through the queue or through one of
+the direct CPU edits (a watch during an UP scroll found most display writes come from code
+outside the handler, e.g. E9EBH, EC49H, EBBDH, EB4AH–EB4FH), so the screen flickered and
+jumped. Now `CptSystem::run_cycles` copies bank 0 each time the RST 6 handler returns (SP
+back above its return address; or 20,000 cycles after entry), and `cpt_real_screen` decodes
+`CptSystem::frame_screen`, the copy, falling back to live memory if no retrace has come for
+4 frames. A change the software spreads over several retraces still shows its steps, as on
+the real display. `cpt-run --cpt-boot` still prints the live screen.
+
+**CODE + IN (building the TOC) flickered worse at first; the decoder was at fault.**
+[CONFIRMED by running it, sampling the screen every 40 cycles.] For each new TOC line the
+builder (around C11CH–C2FDH) turns the previous line's end link from `C2` to `C3` and fixes
+it about 3,300 cycles later. The decoder took any row behind a `C3` for the status row and
+merged it into the title. So for that frame the new line ("D-PAGE…") flashed over
+CONTENTS and the rows below moved up one. Now only a slotted (`B0`) row is taken for the
+status row, as the real one is, and a plain line behind a `C3` shows in its place. The
+other short-lived states were inside the retrace handler, between its two queued patches
+(86–136 cycles: one byte at 50D2H, then a new link). The latch never sees those, and
+neither would the beam, because the handler runs during the retrace. With both changes, a
+6-second TOC build shows no torn frame (`tests/cpt_frame.rs`).
+
 | Code | Width | Meaning | Evidence |
 |---|---|---|---|
 | `00`–`AF` | 1 | a character-ROM glyph; `20`–`7E` ASCII | walker counts columns only below B0 (860AH) |
@@ -355,7 +378,8 @@ The display data has no row or region code for these. Three things in the data d
 - The ruler is made only of glyphs 80H–87H, so the character ROM draws those glyphs inverse.
 - The status row is the optional row behind the `C3` switch. Its characters fall at columns
   64–80, the title line's right end. How the hardware puts it there is unknown; the decoder
-  merges it into the title row.
+  merges it into the title row. It merges only a slotted (`B0`) row: the TOC builder
+  briefly puts a `C3` before each plain line it links in (see "What the browser shows").
 - **Rows with no document text are empty black lines.** For example, the rows above the
   start of the document, which fill the whole upper screen after PAGE, DOWN. They are bare
   `C0 0D` filler rows. Document lines, blank ones included, are separate buffers reached by a

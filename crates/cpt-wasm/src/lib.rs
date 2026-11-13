@@ -538,7 +538,8 @@ pub extern "C" fn cpt_real_running() -> u32 {
 pub extern "C" fn cpt_real_run(cycles: f64) {
     REAL.with(|r| {
         if let Some(sys) = r.borrow_mut().as_mut() {
-            sys.exec.run_cycles(cycles.max(0.0) as u64);
+            // Through the system, so the display memory is latched at each retrace.
+            sys.run_cycles(cycles.max(0.0) as u64);
             // What the printer got goes to the paper, which outlives the system (power off and
             // reset keep the printout). The print-wheel table is read from memory once, the
             // first time a character arrives.
@@ -680,13 +681,15 @@ pub extern "C" fn cpt_real_settled_cycles() -> f64 {
     cpt_machine::cpt_system::SETTLED_CYCLES as f64
 }
 
-/// Decode the current screen into the code/attribute buffers. Returns the number of rows.
+/// Decode the screen into the code/attribute buffers. Returns the number of rows. The screen is
+/// the one latched at the last vertical retrace, as the real display scanned it, so a change
+/// the software is part-way through making never shows (live memory if no recent retrace).
 #[no_mangle]
 pub extern "C" fn cpt_real_screen() -> usize {
     REAL.with(|r| {
         let mut rref = r.borrow_mut();
         let Some(sys) = rref.as_mut() else { return 0 };
-        let screen = sys.screen(REAL_ROWS);
+        let screen = sys.frame_screen(REAL_ROWS);
         REAL_CODES.with(|c| {
             REAL_ATTRS.with(|a| {
                 let (mut c, mut a) = (c.borrow_mut(), a.borrow_mut());

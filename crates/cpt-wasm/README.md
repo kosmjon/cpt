@@ -195,6 +195,10 @@ drive 1: power on or reset), `cpt_real_halt` (power off), `cpt_real_running`, `c
 `cpt_real_key_for_char`, `cpt_real_drive_state`, `cpt_real_disk_bytes`. While no system is
 running, the disks wait in their drives inside the module.
 
+`cpt_real_screen` decodes the display memory as it was when the last retrace handler (RST 6)
+returned, not live memory, so the page never shows a screen change half made (live memory
+if there has been no retrace for 4 frames). See `program-disk.md`, "What the browser shows".
+
 ## Speaker
 
 The real system's speaker plays through the Web Audio API. It is the 8253's counter 0: the

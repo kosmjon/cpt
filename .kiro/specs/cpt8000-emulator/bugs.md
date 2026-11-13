@@ -5,6 +5,13 @@
     ruler rows are white on black now, and the browser draws that 80H as a tiny faint dot on
     a white line.
 * certain other pages reveal black areas and unrecognized glyphs.
+* screen flickers and jumps during scrolling and other operations (browser)
+  * fixed (needs checking by eye): the page decoded live display memory at an arbitrary
+    moment, often mid-edit. It now shows a copy taken when the retrace handler returns. See
+    program-disk.md, "What the browser shows: the frame latched at retrace".
+  * worse during CODE + IN (TOC): fixed. The decoder merged each new TOC line into the title
+    row for a frame (it took the builder's brief `C3` for the status row), so the line
+    flashed over CONTENTS and the screen jumped up a row. Only a slotted row is merged now.
 * special code for underscore not working on screen or print
   * screen: fixed. C4H before a character underlines it (JP-M24's M E M O R A N D U M); the
     cursor and menu selection are the same code, so they are a blinking underline.
